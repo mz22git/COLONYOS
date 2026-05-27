@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ColonyOS — MAPK8IP3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:#f5f7fa; font-family: "DM Mono", monospace; }
+  body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  input, select, button, textarea { font-family: inherit; }
+  /* loading shimmer until React boots */
+  #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+             color:#475569; font-family:"Syne",sans-serif; font-weight:700; letter-spacing:0.1em;
+             font-size:13px; background:#f5f7fa; }
+  #root:not(:empty) + #loading { display:none; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<div id="loading">LOADING COLONYOS…</div>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useRef, useEffect } = React;
+
+/* ───── inline lucide-style icon components ───── */
+const Icon = ({d, size=16, color="currentColor", style, strokeWidth=2}) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+       fill="none" stroke={color} strokeWidth={strokeWidth}
+       strokeLinecap="round" strokeLinejoin="round" style={style}
+       dangerouslySetInnerHTML={{__html:d}}/>
+);
+const mkIcon = paths => (props) => <Icon {...props} d={paths}/>;
+const Search       = mkIcon('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>');
+const Download     = mkIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>');
+const Upload       = mkIcon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>');
+const Plus         = mkIcon('<path d="M5 12h14"/><path d="M12 5v14"/>');
+const X            = mkIcon('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>');
+const Edit2        = mkIcon('<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>');
+const Save         = mkIcon('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>');
+const Trash2       = mkIcon('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>');
+const Mouse        = mkIcon('<rect x="5" y="2" width="14" height="20" rx="7"/><path d="M12 6v4"/>');
+const ChevronDown  = mkIcon('<path d="m6 9 6 6 6-6"/>');
+const ChevronRight = mkIcon('<path d="m9 18 6-6-6-6"/>');
+const AlertCircle  = mkIcon('<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>');
+const Filter       = mkIcon('<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>');
+
+
+/* ───── persistent state hook (localStorage) ───── */
+const useLocalState = (key, initFn) => {
+  const [val, setVal] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if(raw != null) return JSON.parse(raw);
+    } catch(e) {}
+    return typeof initFn === "function" ? initFn() : initFn;
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+  }, [key, val]);
+  return [val, setVal];
+};
+
+/* FONT_LINK is also loaded in HTML head; kept here so the <link> tag inside App renders */
+const FONT_LINK = "https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Syne:wght@400;600;700;800&display=swap";
+
+
+/* ───────────── theme (light) ───────────── */
+const T = {
+  bg:"#f5f7fa", surface:"#ffffff", surfaceAlt:"#f8fafc",
+  border:"#e2e8f0", borderMid:"#cbd5e1",
+  text:"#0f172a", textMid:"#475569", textSoft:"#94a3b8",
+  accent:"#2563eb", accentBg:"#eff6ff", accentBorder:"#bfdbfe",
+  header:"#1e293b",
+  pink:"#be185d", blue:"#1d4ed8",
+};
+
+/* ───────────── genotype catalog (canonical) ─────────────
+   These are the DISTINCT genotype categories. Sibling mice from the same cross
+   can have DIFFERENT genotypes (e.g. a R579C×FVB litter produces some R579C/WT
+   and some plain WT — these must NOT be lumped together).
+*/
+const GENO_CATALOG = [
+  // wild types
+  {key:"WT",                          label:"WT",            color:"#64748b", bg:"#f8fafc"},
+  // flx-16 line (the WT-floxed allele is NOT the same as plain WT)
+  {key:"flx-exon-16-WT/WT",           label:"fWT/fWT",       color:"#0e7490", bg:"#ecfeff"},
+  {key:"flx-exon-16-RC/WT",           label:"fRC/+",         color:"#c2410c", bg:"#fff7ed"},
+  {key:"flx-exon-16-RC/flx-exon-16-WT", label:"flx/flx ★",   color:"#b91c1c", bg:"#fef2f2"},
+  // flx-3.4 line
+  {key:"flx-exon-3,4/WT",             label:"f3.4/+",        color:"#6d28d9", bg:"#f5f3ff"},
+  {key:"flx-exon-3,4/flx-exon-3,4",   label:"f3.4/f3.4 ★",   color:"#a21caf", bg:"#fdf4ff"},
+  {key:"flx-exon-3,4/WT;CreERT2/WT",  label:"f3.4/+;Cre/+",  color:"#7c3aed", bg:"#f5f3ff"},
+  {key:"WT/WT;CreERT2/WT",            label:"WT;Cre/+",      color:"#0c4a6e", bg:"#f0f9ff"},
+  {key:"CreERT2/CreERT2",             label:"Cre/Cre",       color:"#1e40af", bg:"#eff6ff"},
+  {key:"FVB/CreERT2",                 label:"FVB;Cre",       color:"#0369a1", bg:"#f0f9ff"},
+  // point mutants
+  {key:"E27X/WT",                     label:"E27X/+",        color:"#0e7490", bg:"#ecfeff"},
+  {key:"R579C/WT",                    label:"R579C/+",       color:"#854d0e", bg:"#fefce8"},
+  {key:"R1147C/WT",                   label:"R1147C/+",      color:"#9d174d", bg:"#fff1f2"},
+  {key:"R1179C/WT",                   label:"R1179C/+",      color:"#be123c", bg:"#fff1f2"},
+  // breeder transgenes from new lines
+  {key:"NPY-hrGFP",                   label:"NPY-hrGFP",     color:"#15803d", bg:"#f0fdf4"},
+  {key:"Vglut2-ires-cre",             label:"Vglut2-Cre",    color:"#166534", bg:"#f0fdf4"},
+  {key:"Tac1-IRES2-Cre",              label:"Tac1-Cre",      color:"#14532d", bg:"#f0fdf4"},
+  {key:"R26-CreERT2",                 label:"R26-CreERT2",   color:"#1d4ed8", bg:"#eff6ff"},
+  {key:"Ai32",                        label:"Ai32",          color:"#7e22ce", bg:"#faf5ff"},
+  {key:"Ai14",                        label:"Ai14",          color:"#a21caf", bg:"#fdf4ff"},
+  {key:"TRAP2",                       label:"TRAP2",         color:"#9333ea", bg:"#faf5ff"},
+  {key:"Agrp-ires-cre",               label:"Agrp-Cre",      color:"#0f766e", bg:"#f0fdfa"},
+  // unknown
+  {key:"pending",                     label:"pending",       color:"#92400e", bg:"#fffbeb"},
+  {key:"?",                           label:"?",             color:"#64748b", bg:"#f8fafc"},
+];
+const GENO_BY_KEY = Object.fromEntries(GENO_CATALOG.map(g=>[g.key,g]));
+const genoInfo = g => {
+  if(!g) return GENO_BY_KEY["?"];
+  if(GENO_BY_KEY[g]) return GENO_BY_KEY[g];
+  // tolerate variations / case
+  const norm = g.trim();
+  const found = GENO_CATALOG.find(c=>c.key.toLowerCase()===norm.toLowerCase());
+  if(found) return found;
+  return {key:g, label:g.length>14?g.slice(0,12)+"…":g, color:"#64748b", bg:"#f8fafc"};
+};
+
+/* ───────────── crosses (for rack coloring) ───────────── */
+const crossBg = cross => {
+  const c=(cross||"").toLowerCase();
+  if(c.includes("fvb/nj stock")||c.includes("stock")) return "#dbeafe";
+  if(c.includes("flx-16-rc x flx-16-rc")) return "#fee2e2";
+  if(c.includes("flx-16")) return "#dcfce7";
+  if(c.includes("e27x")) return "#d1fae5";
+  if(c.includes("r579c")||c.includes("r1147c")||c.includes("r1179c")) return "#fef9c3";
+  if(c.includes("cre")||c.includes("flx-3.4")) return "#ede9fe";
+  if(c.includes("npy")||c.includes("vglut")||c.includes("tac1")||c.includes("ai32")||c.includes("ai14")||c.includes("trap")||c.includes("agrp")||c.includes("r26")) return "#cffafe";
+  if(c.includes("holding")) return "#f1f5f9";
+  return "#f8fafc";
+};
+const crossBorder = cross => {
+  const c=(cross||"").toLowerCase();
+  if(c.includes("fvb/nj stock")||c.includes("stock")) return "#93c5fd";
+  if(c.includes("flx-16-rc x flx-16-rc")) return "#fca5a5";
+  if(c.includes("flx-16")) return "#86efac";
+  if(c.includes("e27x")) return "#6ee7b7";
+  if(c.includes("r579c")||c.includes("r1147c")||c.includes("r1179c")) return "#fde047";
+  if(c.includes("cre")||c.includes("flx-3.4")) return "#c4b5fd";
+  if(c.includes("npy")||c.includes("vglut")||c.includes("tac1")||c.includes("ai32")||c.includes("ai14")||c.includes("trap")||c.includes("agrp")||c.includes("r26")) return "#67e8f9";
+  if(c.includes("holding")) return "#cbd5e1";
+  return "#e2e8f0";
+};
+
+/* ───────────── seed data (from 5/22/26 sheet) ─────────────
+   Includes ALL weaned mice from MAPK8IP3 WRB + Litters + FVBNJ WRB + Newer Mice.
+   Sibling mice from a single cross are listed individually because their actual
+   genotypes differ (this fixes the original dashboard's collapsing problem).
+*/
+const SEED_MICE = [
+// ====== flx-16 RC x WT litters (Wendy's MAPK8IP3 main line) ======
+// 722149A  738♂(fRC) x 780♀(fWT)  DOB 4/13/26  wean 4/30/26
+{id:"1R149A",  sex:"F", geno:"WT",                  cage:"731954", spot:"6I6",  dob:"4/13/26", litter:"722149A", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 780(fWT)", notes:""},
+{id:"2R149A",  sex:"F", geno:"WT",                  cage:"731954", spot:"6I6",  dob:"4/13/26", litter:"722149A", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 780(fWT)", notes:""},
+{id:"267",     sex:"F", geno:"flx-exon-16-WT/WT",   cage:"731954", spot:"6I6",  dob:"4/13/26", litter:"722149A", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 780(fWT)", notes:""},
+{id:"1R1C149A",sex:"M", geno:"WT",                  cage:"731955", spot:"6H6",  dob:"4/13/26", litter:"722149A", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 780(fWT)", notes:""},
+{id:"268",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"731955", spot:"6H6",  dob:"4/13/26", litter:"722149A", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 780(fWT)", notes:""},
+{id:"1L149A",  sex:"M", geno:"flx-exon-16-WT/WT",   cage:"731955", spot:"6H6",  dob:"4/13/26", litter:"722149A", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 780(fWT)", notes:""},
+// 722149B  738♂ x 779♀  DOB 4/30/26  wean 5/21/26
+{id:"123B",    sex:"F", geno:"pending",             cage:"731971", spot:"6M9",  dob:"4/30/26", litter:"722149B", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 779(fWT)", notes:"wean 5/21"},
+{id:"R149B",   sex:"M", geno:"pending",             cage:"736185", spot:"6K4",  dob:"4/30/26", litter:"722149B", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 779(fWT)", notes:"wean 5/21"},
+{id:"122B",    sex:"M", geno:"pending",             cage:"736185", spot:"6K4",  dob:"4/30/26", litter:"722149B", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 779(fWT)", notes:"wean 5/21"},
+{id:"121B",    sex:"M", geno:"pending",             cage:"736185", spot:"6K4",  dob:"4/30/26", litter:"722149B", cross:"flx-16-RC x flx-16-WT", parents:"738(fRC) x 779(fWT)", notes:"wean 5/21"},
+// 722149C  738♂ x 779/780  DOB 5/4/26  wean 5/25/26  (7 pups)
+{id:"_001",    sex:"F", geno:"pending",             cage:"731967", spot:"6H10", dob:"5/4/26",  litter:"722149C", cross:"flx-16-RC x flx-16-WT", parents:"738 x 779/780", notes:"wean 5/25"},
+{id:"_002",    sex:"F", geno:"pending",             cage:"731933", spot:"6L1",  dob:"5/4/26",  litter:"722149C", cross:"flx-16-RC x flx-16-WT", parents:"738 x 779/780", notes:""},
+{id:"RV149C",  sex:"F", geno:"pending",             cage:"731931", spot:"6K1",  dob:"5/4/26",  litter:"722149C", cross:"flx-16-RC x flx-16-WT", parents:"738 x 779/780", notes:"weird cut"},
+{id:"_007",    sex:"M", geno:"pending",             cage:"736188", spot:"6H4",  dob:"5/4/26",  litter:"722149C", cross:"flx-16-RC x flx-16-WT", parents:"738 x 779/780", notes:"loose tail mark L"},
+{id:"LR149",   sex:"M", geno:"pending",             cage:"736188", spot:"6H4",  dob:"5/4/26",  litter:"722149C", cross:"flx-16-RC x flx-16-WT", parents:"738 x 779/780", notes:""},
+{id:"_008",    sex:"M", geno:"pending",             cage:"736188", spot:"6H4",  dob:"5/4/26",  litter:"722149C", cross:"flx-16-RC x flx-16-WT", parents:"738 x 779/780", notes:""},
+{id:"L149B",   sex:"M", geno:"pending",             cage:"736188", spot:"6H4",  dob:"5/4/26",  litter:"722149C", cross:"flx-16-RC x flx-16-WT", parents:"738 x 779/780", notes:""},
+// 722153A  703♂(fRC) x 810♀(fWT)  DOB 3/24/26
+{id:"124",     sex:"F", geno:"flx-exon-16-WT/WT",   cage:"729990", spot:"6M2",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"122",     sex:"F", geno:"WT",                  cage:"729990", spot:"6M2",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"X90",     sex:"F", geno:"WT",                  cage:"729990", spot:"6M2",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"115",     sex:"F", geno:"WT",                  cage:"729990", spot:"6M2",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"113",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"729988", spot:"6M1",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:"tailmark"},
+{id:"117",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"729988", spot:"6M1",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"112",     sex:"M", geno:"WT",                  cage:"729988", spot:"6M1",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"116",     sex:"M", geno:"WT",                  cage:"729989", spot:"6J1",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"121",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"729989", spot:"6J1",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"225",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"729989", spot:"6J1",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+{id:"X89",     sex:"M", geno:"WT",                  cage:"729989", spot:"6J1",  dob:"3/24/26", litter:"722153A", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 810(fWT)", notes:""},
+// 722153B  703♂(fRC) x 831♀(fWT)  DOB 4/16/26
+{id:"1R2153",  sex:"F", geno:"WT",                  cage:"731971", spot:"6M9",  dob:"4/16/26", litter:"722153B", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 831(fWT)", notes:""},
+{id:"X2153",   sex:"F", geno:"flx-exon-16-WT/WT",   cage:"731971", spot:"6M9",  dob:"4/16/26", litter:"722153B", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 831(fWT)", notes:""},
+{id:"1L2153",  sex:"F", geno:"flx-exon-16-WT/WT",   cage:"731971", spot:"6M9",  dob:"4/16/26", litter:"722153B", cross:"flx-16-RC x flx-16-WT", parents:"703(fRC) x 831(fWT)", notes:""},
+// 712150A  736♂(fRC) x 819♀(fWT)  DOB 3/25/26
+{id:"165",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"730025", spot:"6L4",  dob:"3/25/26", litter:"712150A", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 819(fWT)", notes:""},
+{id:"176",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"730025", spot:"6L4",  dob:"3/25/26", litter:"712150A", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 819(fWT)", notes:""},
+{id:"RCut",    sex:"F", geno:"flx-exon-16-RC/WT",   cage:"730025", spot:"6L4",  dob:"3/25/26", litter:"712150A", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 819(fWT)", notes:""},
+{id:"167",     sex:"M", geno:"flx-exon-16-RC/WT",   cage:"730026", spot:"6K5",  dob:"3/25/26", litter:"712150A", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 819(fWT)", notes:""},
+{id:"1R150",   sex:"M", geno:"flx-exon-16-RC/WT",   cage:"730026", spot:"6K5",  dob:"3/25/26", litter:"712150A", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 819(fWT)", notes:""},
+{id:"166",     sex:"M", geno:"WT",                  cage:"730026", spot:"6K5",  dob:"3/25/26", litter:"712150A", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 819(fWT)", notes:""},
+// 712150B  736♂(fRC) x 804♀(fWT)  DOB 3/27/26
+{id:"200",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"730025", spot:"6L4",  dob:"3/27/26", litter:"712150B", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:""},
+{id:"125",     sex:"F", geno:"flx-exon-16-RC/flx-exon-16-WT", cage:"733459", spot:"6I4", dob:"3/27/26", litter:"712150B", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:"breed to CreERT2"},
+{id:"201",     sex:"F", geno:"WT",                  cage:"729995", spot:"6L3",  dob:"3/27/26", litter:"712150B", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:""},
+// 712150C  736♂(fRC) x 804♀(fWT)  DOB 4/16/26
+{id:"274",     sex:"M", geno:"WT",                  cage:"731969", spot:"6I7",  dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:""},
+{id:"276",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"731969", spot:"6I7",  dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:""},
+{id:"272",     sex:"M", geno:"flx-exon-16-RC/flx-exon-16-WT", cage:"731969", spot:"6I7", dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:"compound flox"},
+{id:"277",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731967", spot:"6H10", dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:""},
+{id:"275",     sex:"F", geno:"flx-exon-16-RC/flx-exon-16-WT", cage:"731967", spot:"6H10", dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:"compound flox"},
+{id:"1R150C",  sex:"M", geno:"flx-exon-16-WT/WT",   cage:"731968", spot:"6H7",  dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:"other"},
+{id:"1R1L150C",sex:"M", geno:"flx-exon-16-WT/WT",   cage:"731968", spot:"6H7",  dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:"other"},
+{id:"273",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"731968", spot:"6H7",  dob:"4/16/26", litter:"712150C", cross:"flx-16-RC x flx-16-WT", parents:"736(fRC) x 804(fWT)", notes:"other"},
+// 722181A  821♂(fWT) x 716♀(fRC)  DOB 3/24/26
+{id:"SR",      sex:"F", geno:"flx-exon-16-RC/WT",   cage:"729995", spot:"6L3",  dob:"3/24/26", litter:"722181A", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"1R/X",    sex:"F", geno:"WT",                  cage:"729995", spot:"6L3",  dob:"3/24/26", litter:"722181A", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"107",     sex:"F", geno:"WT",                  cage:"730025", spot:"6L4",  dob:"3/24/26", litter:"722181A", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"106RS",   sex:"M", geno:"WT",                  cage:"729996", spot:"6M4",  dob:"3/24/26", litter:"722181A", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"108",     sex:"M", geno:"flx-exon-16-RC/WT",   cage:"729996", spot:"6M4",  dob:"3/24/26", litter:"722181A", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:"REF#"},
+{id:"2R",      sex:"M", geno:"flx-exon-16-RC/WT",   cage:"729996", spot:"6M4",  dob:"3/24/26", litter:"722181A", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"1L",      sex:"M", geno:"flx-exon-16-RC/WT",   cage:"729996", spot:"6M4",  dob:"3/24/26", litter:"722181A", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+// 722181B  821♂(fWT) x 716♀(fRC)  DOB 4/16/26
+{id:"269",     sex:"F", geno:"WT",                  cage:"731967", spot:"6H10", dob:"4/16/26", litter:"722181B", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"271",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731967", spot:"6H10", dob:"4/16/26", litter:"722181B", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"270",     sex:"M", geno:"WT",                  cage:"731970", spot:"6H9",  dob:"4/16/26", litter:"722181B", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"X181B",   sex:"M", geno:"flx-exon-16-RC/WT",   cage:"731970", spot:"6H9",  dob:"4/16/26", litter:"722181B", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+{id:"R181B",   sex:"M", geno:"WT",                  cage:"731970", spot:"6H9",  dob:"4/16/26", litter:"722181B", cross:"flx-16-WT x flx-16-RC", parents:"821(fWT) x 716(fRC)", notes:""},
+// 722181C  821♂ x 716♀  DOB 5/5/26  wean 5/26/26
+{id:"_009",    sex:"?", geno:"pending",             cage:"TBD",    spot:"TBD",  dob:"5/5/26",  litter:"722181C", cross:"flx-16-WT x flx-16-RC", parents:"821 x 716", notes:"wean 5/26"},
+{id:"_010",    sex:"?", geno:"pending",             cage:"TBD",    spot:"TBD",  dob:"5/5/26",  litter:"722181C", cross:"flx-16-WT x flx-16-RC", parents:"821 x 716", notes:"wean 5/26"},
+{id:"_011",    sex:"?", geno:"pending",             cage:"TBD",    spot:"TBD",  dob:"5/5/26",  litter:"722181C", cross:"flx-16-WT x flx-16-RC", parents:"821 x 716", notes:"wean 5/26"},
+{id:"_012",    sex:"?", geno:"pending",             cage:"TBD",    spot:"TBD",  dob:"5/5/26",  litter:"722181C", cross:"flx-16-WT x flx-16-RC", parents:"821 x 716", notes:"wean 5/26"},
+{id:"_014",    sex:"?", geno:"pending",             cage:"TBD",    spot:"TBD",  dob:"5/5/26",  litter:"722181C", cross:"flx-16-WT x flx-16-RC", parents:"821 x 716", notes:"wean 5/26"},
+// 722186A  801♂(fWT) x 734♀(fRC)  DOB 4/1/26
+{id:"248",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731931", spot:"6K1",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"252",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731931", spot:"6K1",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"253",     sex:"F", geno:"WT",                  cage:"731931", spot:"6K1",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"255",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731931", spot:"6K1",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"256",     sex:"F", geno:"WT",                  cage:"731933", spot:"6L1",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"258",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731933", spot:"6L1",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"250",     sex:"M", geno:"WT",                  cage:"731932", spot:"6K2",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"251",     sex:"M", geno:"WT",                  cage:"731932", spot:"6K2",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"254",     sex:"M", geno:"pending",             cage:"731932", spot:"6K2",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"257",     sex:"M", geno:"WT",                  cage:"731932", spot:"6K2",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"259",     sex:"M", geno:"WT",                  cage:"731932", spot:"6K2",  dob:"4/1/26",  litter:"722186A", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+// 722186B  801♂(fWT) x 734♀(fRC)  DOB 4/23/26
+{id:"115B",    sex:"F", geno:"WT",                  cage:"731954", spot:"6I6",  dob:"4/23/26", litter:"722186B", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"113B",    sex:"F", geno:"WT",                  cage:"731954", spot:"6I6",  dob:"4/23/26", litter:"722186B", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"X186B",   sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731971", spot:"6M9",  dob:"4/23/26", litter:"722186B", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"114B",    sex:"M", geno:"WT",                  cage:"733395", spot:"6H5",  dob:"4/23/26", litter:"722186B", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:""},
+{id:"112B",    sex:"M", geno:"flx-exon-16-RC/WT",   cage:"733395", spot:"6H5",  dob:"4/23/26", litter:"722186B", cross:"flx-16-WT x flx-16-RC", parents:"801(fWT) x 734(fRC)", notes:"slit"},
+// 722185A  800♂(fWT) x 730♀(fRC)  DOB 4/1/26
+{id:"239",     sex:"F", geno:"WT",                  cage:"731930", spot:"6M3",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"241",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731930", spot:"6M3",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"243",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731930", spot:"6M3",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"245",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731930", spot:"6M3",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"246",     sex:"F", geno:"WT",                  cage:"731930", spot:"6M3",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"247",     sex:"F", geno:"WT",                  cage:"731933", spot:"6L1",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"249",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"729995", spot:"6L3",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"240",     sex:"M", geno:"WT",                  cage:"731929", spot:"6L2",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"242",     sex:"M", geno:"flx-exon-16-RC/WT",   cage:"731929", spot:"6L2",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+{id:"244",     sex:"M", geno:"flx-exon-16-RC/WT",   cage:"731929", spot:"6L2",  dob:"4/1/26",  litter:"722185A", cross:"flx-16-WT x flx-16-RC", parents:"800(fWT) x 730(fRC)", notes:""},
+// 722180A  776♂(fWT) x 739♀(fRC)  DOB 4/1/26
+{id:"261",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731952", spot:"6J4",  dob:"4/1/26",  litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:""},
+{id:"262",     sex:"F", geno:"WT",                  cage:"731952", spot:"6J4",  dob:"4/1/26",  litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:""},
+{id:"263",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731952", spot:"6J4",  dob:"4/1/26",  litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:""},
+{id:"264",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"731952", spot:"6J4",  dob:"4/1/26",  litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:""},
+{id:"X952",    sex:"F", geno:"flx-exon-16-RC/flx-exon-16-WT", cage:"733459", spot:"6I4", dob:"4/1/26", litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:"breed to CreERT2"},
+{id:"265",     sex:"M", geno:"flx-exon-16-RC/WT",   cage:"731953", spot:"6M6",  dob:"4/1/26",  litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:""},
+{id:"266",     sex:"M", geno:"flx-exon-16-WT/WT",   cage:"731953", spot:"6M6",  dob:"4/1/26",  litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:""},
+{id:"X953",    sex:"M", geno:"WT",                  cage:"731953", spot:"6M6",  dob:"4/1/26",  litter:"722180A", cross:"flx-16-WT x flx-16-RC", parents:"776(fWT) x 739(fRC)", notes:""},
+// 722152A  702♂(fRC) x 809♀(fWT)  DOB 3/25/26
+{id:"168",     sex:"F", geno:"WT",                  cage:"730027", spot:"6L5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+{id:"173",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"730027", spot:"6L5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+{id:"174",     sex:"F", geno:"flx-exon-16-RC/WT",   cage:"730027", spot:"6L5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+{id:"1RS27",   sex:"F", geno:"flx-exon-16-RC/WT",   cage:"730027", spot:"6L5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+{id:"170",     sex:"M", geno:"WT",                  cage:"730028", spot:"6M5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+{id:"172",     sex:"M", geno:"WT",                  cage:"730028", spot:"6M5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+{id:"175",     sex:"M", geno:"WT",                  cage:"730028", spot:"6M5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+{id:"1RS28",   sex:"M", geno:"WT",                  cage:"730028", spot:"6M5",  dob:"3/25/26", litter:"722152A", cross:"flx-16-RC x flx-16-WT", parents:"702(fRC) x 809(fWT)", notes:""},
+// 722158A  704♂(fRC) x 835♀(fWT)  DOB 3/25-4/1/26
+{id:"1R158",   sex:"F", geno:"flx-exon-16-WT/WT",   cage:"729990", spot:"6M2",  dob:"4/1/26",  litter:"722158A", cross:"flx-16-RC x flx-16-WT", parents:"704(fRC) x 835(fWT)", notes:"verify - 704 may not be fRC"},
+{id:"RS88",    sex:"M", geno:"flx-exon-16-WT/WT",   cage:"729988", spot:"6M1",  dob:"3/25/26", litter:"722158A", cross:"flx-16-RC x flx-16-WT", parents:"704(fRC) x 835(fWT)", notes:""},
+{id:"1L158",   sex:"F", geno:"flx-exon-16-WT/WT",   cage:"730027", spot:"6L5",  dob:"4/1/26",  litter:"722158A", cross:"flx-16-RC x flx-16-WT", parents:"704(fRC) x 835(fWT)", notes:""},
+{id:"RC158",   sex:"M", geno:"flx-exon-16-WT/WT",   cage:"730026", spot:"6K5",  dob:"3/25/26", litter:"722158A", cross:"flx-16-RC x flx-16-WT", parents:"704(fRC) x 835(fWT)", notes:"double check"},
+
+// ====== CreERT2 x FVB ======
+{id:"Male1",   sex:"M", geno:"FVB/CreERT2",         cage:"730010", spot:"6I9",  dob:"3/25/26", litter:"722148A", cross:"CreERT2 x FVB/NJ", parents:"CreERT2 x FVB", notes:"N1"},
+{id:"Male2",   sex:"M", geno:"FVB/CreERT2",         cage:"730010", spot:"6I9",  dob:"3/25/26", litter:"722148A", cross:"CreERT2 x FVB/NJ", parents:"CreERT2 x FVB", notes:"N1"},
+
+// ====== CreERT2 x flx-3.4 ======
+{id:"192",     sex:"M", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"730029", spot:"6L7", dob:"3/27/26", litter:"722174A", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:"breed w/ f34/f34"},
+{id:"196",     sex:"M", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"730029", spot:"6L7", dob:"3/27/26", litter:"722174A", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:"breed w/ f34/f34"},
+{id:"199",     sex:"M", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"730029", spot:"6L7", dob:"3/27/26", litter:"722174A", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:"breed 280 w/ 199 on 6/1"},
+{id:"X74",     sex:"F", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"733391", spot:"6K7", dob:"3/27/26", litter:"722174A", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:""},
+{id:"193",     sex:"M", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"730031", spot:"6J7", dob:"3/27/26", litter:"722174A", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:"breed w/ f34/f34"},
+{id:"194",     sex:"M", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"730031", spot:"6J7", dob:"3/27/26", litter:"722174A", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:""},
+{id:"195",     sex:"M", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"730031", spot:"6J7", dob:"3/27/26", litter:"722174A", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:""},
+{id:"278",     sex:"F", geno:"WT/WT;CreERT2/WT",          cage:"733391", spot:"6K7", dob:"4/20/26", litter:"722174B", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:"Sac 6/1/26"},
+{id:"280",     sex:"F", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"733391", spot:"6K7", dob:"4/20/26", litter:"722174B", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:"breed w/ 199 on 6/1"},
+{id:"279",     sex:"M", geno:"WT/WT;CreERT2/WT",          cage:"733393", spot:"6L9", dob:"4/20/26", litter:"722174B", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:""},
+{id:"R2174B",  sex:"M", geno:"WT/WT;CreERT2/WT",          cage:"733393", spot:"6L9", dob:"4/20/26", litter:"722174B", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:""},
+{id:"L2174B",  sex:"M", geno:"flx-exon-3,4/WT;CreERT2/WT", cage:"733393", spot:"6L9", dob:"4/20/26", litter:"722174B", cross:"CreERT2 x flx-3.4", parents:"CreERT2 x 923(f34Het)", notes:""},
+
+// ====== flx-3.4 x flx-3.4 ======
+{id:"234",     sex:"M", geno:"flx-exon-3,4/WT",     cage:"731927", spot:"6K6",  dob:"4/1/26",  litter:"722178A", cross:"flx-3.4 x flx-3.4", parents:"920(f34Het) x 922(f34Het)", notes:""},
+{id:"235",     sex:"M", geno:"flx-exon-3,4/WT",     cage:"731927", spot:"6K6",  dob:"4/1/26",  litter:"722178A", cross:"flx-3.4 x flx-3.4", parents:"920(f34Het) x 922(f34Het)", notes:""},
+{id:"236",     sex:"M", geno:"flx-exon-3,4/flx-exon-3,4", cage:"731927", spot:"6K6", dob:"4/1/26", litter:"722178A", cross:"flx-3.4 x flx-3.4", parents:"920(f34Het) x 922(f34Het)", notes:"key cohort"},
+{id:"238",     sex:"M", geno:"flx-exon-3,4/WT",     cage:"731927", spot:"6K6",  dob:"4/1/26",  litter:"722178A", cross:"flx-3.4 x flx-3.4", parents:"920(f34Het) x 922(f34Het)", notes:""},
+{id:"233",     sex:"F", geno:"flx-exon-3,4/flx-exon-3,4", cage:"731928", spot:"6L6", dob:"4/1/26", litter:"722178A", cross:"flx-3.4 x flx-3.4", parents:"920(f34Het) x 922(f34Het)", notes:"key cohort"},
+{id:"237",     sex:"F", geno:"flx-exon-3,4/flx-exon-3,4", cage:"731928", spot:"6L6", dob:"4/1/26", litter:"722178A", cross:"flx-3.4 x flx-3.4", parents:"920(f34Het) x 922(f34Het)", notes:"key cohort"},
+// 722179A  919♂ x 698♀  DOB 3/30/26
+{id:"209",     sex:"F", geno:"flx-exon-3,4/WT",     cage:"731928", spot:"6L6",  dob:"3/30/26", litter:"722179A", cross:"flx-3.4 x flx-3.4", parents:"919(f34Het) x 698(f34Het)", notes:""},
+{id:"210",     sex:"F", geno:"flx-exon-3,4/WT",     cage:"731928", spot:"6L6",  dob:"3/30/26", litter:"722179A", cross:"flx-3.4 x flx-3.4", parents:"919(f34Het) x 698(f34Het)", notes:""},
+{id:"205",     sex:"M", geno:"WT",                  cage:"730036", spot:"6J6",  dob:"3/30/26", litter:"722179A", cross:"flx-3.4 x flx-3.4", parents:"919(f34Het) x 698(f34Het)", notes:""},
+{id:"206",     sex:"M", geno:"flx-exon-3,4/WT",     cage:"730036", spot:"6J6",  dob:"3/30/26", litter:"722179A", cross:"flx-3.4 x flx-3.4", parents:"919(f34Het) x 698(f34Het)", notes:""},
+{id:"207",     sex:"M", geno:"flx-exon-3,4/WT",     cage:"730036", spot:"6J6",  dob:"3/30/26", litter:"722179A", cross:"flx-3.4 x flx-3.4", parents:"919(f34Het) x 698(f34Het)", notes:""},
+{id:"RC179",   sex:"M", geno:"flx-exon-3,4/flx-exon-3,4", cage:"730036", spot:"6J6", dob:"3/30/26", litter:"722179A", cross:"flx-3.4 x flx-3.4", parents:"919(f34Het) x 698(f34Het)", notes:"key cohort"},
+// 722179B  696♂ x 698♀  DOB 4/21/26
+{id:"116B",    sex:"F", geno:"WT",                  cage:"733382", spot:"6J5",  dob:"4/21/26", litter:"722179B", cross:"flx-3.4 x flx-3.4", parents:"696(f34Het) x 698(f34Het)", notes:""},
+{id:"R179B",   sex:"F", geno:"WT",                  cage:"733382", spot:"6J5",  dob:"4/21/26", litter:"722179B", cross:"flx-3.4 x flx-3.4", parents:"696(f34Het) x 698(f34Het)", notes:""},
+{id:"118B",    sex:"M", geno:"WT",                  cage:"733383", spot:"6I5",  dob:"4/21/26", litter:"722179B", cross:"flx-3.4 x flx-3.4", parents:"696(f34Het) x 698(f34Het)", notes:""},
+{id:"119B",    sex:"M", geno:"flx-exon-3,4/WT",     cage:"733383", spot:"6I5",  dob:"4/21/26", litter:"722179B", cross:"flx-3.4 x flx-3.4", parents:"696(f34Het) x 698(f34Het)", notes:"crooked"},
+{id:"120B",    sex:"M", geno:"flx-exon-3,4/flx-exon-3,4", cage:"733383", spot:"6I5", dob:"4/21/26", litter:"722179B", cross:"flx-3.4 x flx-3.4", parents:"696(f34Het) x 698(f34Het)", notes:"key cohort"},
+{id:"117B",    sex:"M", geno:"WT",                  cage:"733383", spot:"6I5",  dob:"4/21/26", litter:"722179B", cross:"flx-3.4 x flx-3.4", parents:"696(f34Het) x 698(f34Het)", notes:""},
+
+// ====== E27X x FVB ======
+{id:"218",     sex:"F", geno:"E27X/WT",             cage:"733396", spot:"6H4",  dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:"rotate 5/21"},
+{id:"216",     sex:"F", geno:"E27X/WT",             cage:"733396", spot:"6H4",  dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"214",     sex:"F", geno:"WT",                  cage:"731922", spot:"6I10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"215",     sex:"F", geno:"WT",                  cage:"731922", spot:"6I10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"217",     sex:"F", geno:"E27X/WT",             cage:"731922", spot:"6I10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"220",     sex:"F", geno:"E27X/WT",             cage:"731923", spot:"6J10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"230",     sex:"F", geno:"E27X/WT",             cage:"731923", spot:"6J10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"228",     sex:"F", geno:"WT",                  cage:"731923", spot:"6J10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"229",     sex:"F", geno:"E27X/WT",             cage:"731923", spot:"6J10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"219",     sex:"M", geno:"E27X/WT",             cage:"731924", spot:"6K10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"221",     sex:"M", geno:"E27X/WT",             cage:"731924", spot:"6K10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"222",     sex:"M", geno:"E27X/WT",             cage:"731924", spot:"6K10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"226",     sex:"M", geno:"E27X/WT",             cage:"731924", spot:"6K10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"227",     sex:"M", geno:"E27X/WT",             cage:"731924", spot:"6K10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"231",     sex:"M", geno:"E27X/WT",             cage:"731925", spot:"6L10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"232",     sex:"M", geno:"WT",                  cage:"731925", spot:"6L10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"X925",    sex:"M", geno:"WT",                  cage:"731925", spot:"6L10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"223",     sex:"F", geno:"E27X/WT",             cage:"731926", spot:"6M10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"X926",    sex:"F", geno:"WT",                  cage:"731926", spot:"6M10", dob:"3/30/26", litter:"722161A", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+// 722162B  910 x FVB  DOB 4/21/26
+{id:"284",     sex:"M", geno:"WT",                  cage:"733384", spot:"6I1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"293",     sex:"M", geno:"E27X/WT",             cage:"733384", spot:"6I1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"289",     sex:"M", geno:"E27X/WT",             cage:"733384", spot:"6I1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"286",     sex:"M", geno:"E27X/WT",             cage:"733384", spot:"6I1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"287",     sex:"M", geno:"E27X/WT",             cage:"733384", spot:"6I1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"288",     sex:"F", geno:"E27X/WT",             cage:"733385", spot:"6H1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"298",     sex:"F", geno:"WT",                  cage:"733385", spot:"6H1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"281",     sex:"F", geno:"E27X/WT",             cage:"733385", spot:"6H1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"292",     sex:"F", geno:"E27X/WT",             cage:"733385", spot:"6H1",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"290",     sex:"F", geno:"E27X/WT",             cage:"731926", spot:"6M10", dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"294",     sex:"F", geno:"E27X/WT",             cage:"731926", spot:"6M10", dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"283",     sex:"F", geno:"E27X/WT",             cage:"731926", spot:"6M10", dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"299",     sex:"F", geno:"E27X/WT",             cage:"733387", spot:"6H2",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"282",     sex:"F", geno:"E27X/WT",             cage:"733387", spot:"6H2",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"285",     sex:"M", geno:"WT",                  cage:"733386", spot:"6I2",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"R162B",   sex:"M", geno:"WT",                  cage:"733386", spot:"6I2",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"291",     sex:"M", geno:"WT",                  cage:"733386", spot:"6I2",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"296",     sex:"M", geno:"WT",                  cage:"733386", spot:"6I2",  dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+{id:"295",     sex:"F", geno:"E27X/WT",             cage:"731923", spot:"6J10", dob:"4/21/26", litter:"722162B", cross:"E27X x FVB/NJ", parents:"910(E27XHet) x FVB-F", notes:""},
+
+// ====== R579C x FVB ======
+// 722159A  892♂ x FVB♀  DOB 3/24/26
+{id:"129",     sex:"M", geno:"WT",                  cage:"730004", spot:"6I8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"131",     sex:"M", geno:"WT",                  cage:"730004", spot:"6I8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"137",     sex:"M", geno:"WT",                  cage:"730004", spot:"6I8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"134",     sex:"M", geno:"R579C/WT",            cage:"730004", spot:"6I8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"X04",     sex:"M", geno:"WT",                  cage:"730004", spot:"6I8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"130",     sex:"F", geno:"WT",                  cage:"730005", spot:"6H8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"1R",      sex:"F", geno:"WT",                  cage:"730005", spot:"6H8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"1L-159",  sex:"F", geno:"pending",             cage:"730005", spot:"6H8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:"resample - showing flx WT?"},
+{id:"141",     sex:"F", geno:"WT",                  cage:"730005", spot:"6H8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"X05",     sex:"F", geno:"WT",                  cage:"730005", spot:"6H8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"127",     sex:"M", geno:"WT",                  cage:"730006", spot:"6K8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"135",     sex:"M", geno:"R579C/WT",            cage:"730006", spot:"6K8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"151",     sex:"M", geno:"WT",                  cage:"730006", spot:"6K8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"260",     sex:"M", geno:"R579C/WT",            cage:"730006", spot:"6K8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"X06",     sex:"M", geno:"R579C/WT",            cage:"730006", spot:"6K8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"136",     sex:"F", geno:"WT",                  cage:"730007", spot:"6J8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"126",     sex:"F", geno:"WT",                  cage:"730007", spot:"6J8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+{id:"132",     sex:"F", geno:"R579C/WT",            cage:"730007", spot:"6J8",  dob:"3/24/26", litter:"722159A", cross:"R579C x FVB/NJ", parents:"892(R579CHet) x FVB-F", notes:""},
+// 722159B  891 x FVB  DOB 3/24/26
+{id:"157",     sex:"M", geno:"WT",                  cage:"730001", spot:"6M7",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"162",     sex:"M", geno:"R579C/WT",            cage:"730001", spot:"6M7",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"163",     sex:"M", geno:"R579C/WT",            cage:"730001", spot:"6M7",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"164",     sex:"M", geno:"R579C/WT",            cage:"730001", spot:"6M7",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"156",     sex:"F", geno:"R579C/WT",            cage:"730002", spot:"6L8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"1R160",   sex:"F", geno:"R579C/WT",            cage:"730002", spot:"6L8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"158",     sex:"F", geno:"WT",                  cage:"730002", spot:"6L8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"160",     sex:"F", geno:"WT",                  cage:"730002", spot:"6L8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"154",     sex:"F", geno:"R579C/WT",            cage:"730002", spot:"6L8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"153",     sex:"F", geno:"R579C/WT",            cage:"730003", spot:"6M8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"161",     sex:"F", geno:"WT",                  cage:"730003", spot:"6M8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"159",     sex:"F", geno:"WT",                  cage:"730003", spot:"6M8",  dob:"3/24/26", litter:"722159B", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+// 726200A  891 x FVB  DOB 4/20/26
+{id:"107B",    sex:"M", geno:"R579C/WT",            cage:"733388", spot:"6J2",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"101",     sex:"M", geno:"WT",                  cage:"733388", spot:"6J2",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"102",     sex:"M", geno:"WT",                  cage:"733388", spot:"6J2",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"1R200",   sex:"M", geno:"WT",                  cage:"733388", spot:"6J2",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"108B",    sex:"M", geno:"pending",             cage:"733388", spot:"6J2",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"103",     sex:"F", geno:"WT",                  cage:"730003", spot:"6M8",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"110",     sex:"F", geno:"WT",                  cage:"730003", spot:"6M8",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"109",     sex:"F", geno:"WT",                  cage:"730007", spot:"6J8",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"104",     sex:"F", geno:"R579C/WT",            cage:"730007", spot:"6J8",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"106B",    sex:"F", geno:"R579C/WT",            cage:"733389", spot:"6H3",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"111",     sex:"F", geno:"WT",                  cage:"733389", spot:"6H3",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"100",     sex:"M", geno:"pending",             cage:"733390", spot:"6I3",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+{id:"X105",    sex:"M", geno:"R579C/WT",            cage:"733390", spot:"6I3",  dob:"4/20/26", litter:"726200A", cross:"R579C x FVB/NJ", parents:"891(R579CHet) x FVB-F", notes:""},
+];
+
+/* ───────────── breeder & stock cages ─────────────
+   These are cages without weaned progeny, or breeder pairs we want shown on the rack.
+*/
+const SEED_BREEDERS = [
+  // flx-16 RC x RC
+  {spot:"7A4", cage:"711986", label:"719(fRC)♀ x 724(fRC)♂", cross:"flx-16-RC x flx-16-RC", note:"watch for fighting"},
+  // flx-16 RC x WT breeders
+  {spot:"7B6", cage:"722149", label:"780(fWT)♀ x 738(fRC)♂", cross:"flx-16-RC x flx-16-WT", note:""},
+  {spot:"7B3", cage:"722153", label:"831(fWT)♀ 779(fWT)♀ x 703♂", cross:"flx-16-RC x flx-16-WT", note:""},
+  {spot:"7C6", cage:"726199", label:"736(fRC)♂ x 794(fWT)♀ 804(fWT)♀", cross:"flx-16-RC x flx-16-WT", note:""},
+  {spot:"7C5", cage:"726242", label:"704(fRC)♂ x 835(fWT)♀", cross:"flx-16-RC x flx-16-WT", note:"check 704 genotype"},
+  // flx-16 WT x RC breeders
+  {spot:"7D5", cage:"722181", label:"821(fWT)♂ x 716(fRC)♀", cross:"flx-16-WT x flx-16-RC", note:"check 821 genotype"},
+  {spot:"7F6", cage:"722186", label:"801(fWT)♂ x 734(fRC)♀", cross:"flx-16-WT x flx-16-RC", note:"not flx 801"},
+  {spot:"7E5", cage:"722185", label:"800(fWT)♂ x 730(fRC)♀", cross:"flx-16-WT x flx-16-RC", note:"not flx - sac?"},
+  {spot:"7B5", cage:"722180", label:"776(fWT)♂ x 739(fRC)♀", cross:"flx-16-WT x flx-16-RC", note:"keep - both flx"},
+  {spot:"7D6", cage:"731997", label:"802(fWT)♂ x new brown ♀", cross:"flx-16-WT x flx-16-RC", note:""},
+  // CreERT2
+  {spot:"7E7", cage:"722173", label:"CreERT2 ♂ x CreERT2 ♀", cross:"CreERT2 x CreERT2", note:"homo x homo"},
+  {spot:"7E4", cage:"722739", label:"A B C D (homo Cre ♂)", cross:"CreERT2 holding", note:""},
+  {spot:"7D4", cage:"722763", label:"E F G H I (homo Cre ♂)", cross:"CreERT2 holding", note:""},
+  {spot:"7F4", cage:"724245", label:"J (homo Cre ♂)", cross:"CreERT2 holding", note:""},
+  {spot:"7F7", cage:"722174", label:"CreERT2 ♂ x 923(f34Het)♀", cross:"CreERT2 x flx-3.4", note:"breed to 125 when ready"},
+  // flx-3.4
+  {spot:"7C10",cage:"722178", label:"920(f34Het)♂ x 922(f34Het)♀", cross:"flx-3.4 x flx-3.4", note:""},
+  {spot:"7A8", cage:"722179", label:"696(f34Het)♂ x 698(f34Het)♀", cross:"flx-3.4 x flx-3.4", note:""},
+  {spot:"7A10",cage:"730013", label:"919(f34Het)♂ x 923(f34Het)♀", cross:"flx-3.4 x flx-3.4", note:""},
+  // E27X
+  {spot:"7B7", cage:"722161", label:"E27X Het ♂ x FVB ♀♀", cross:"E27X x FVB/NJ", note:""},
+  {spot:"7C9", cage:"722162", label:"909(E27X)♂ x FVB ♀♀", cross:"E27X x FVB/NJ", note:""},
+  {spot:"7C8", cage:"726178", label:"910(E27X)♂ x FVB ♀♀", cross:"E27X x FVB/NJ", note:"progeny can be studied"},
+  // R579C / R1147C / R1179C
+  {spot:"7D8", cage:"722159", label:"892(R579C)♂ x FVB ♀♀", cross:"R579C x FVB/NJ", note:""},
+  {spot:"7E8", cage:"722160", label:"R579CHet ♂ x FVB ♀♀", cross:"R579C x FVB/NJ", note:""},
+  {spot:"7F8", cage:"726200", label:"R579CHet ♂ x FVB ♀♀", cross:"R579C x FVB/NJ", note:""},
+  {spot:"7B4", cage:"731920", label:"891(R579C)♂ x FVB ♀", cross:"R579C x FVB/NJ", note:""},
+  {spot:"7G8", cage:"722169", label:"769(R1147C)♂ x FVB ♀♀", cross:"R1147C x FVB/NJ", note:"IVF if no litter by 5/23"},
+  {spot:"7B9", cage:"722170", label:"770(R1179C)♂ x FVB ♀♀", cross:"R1179C x FVB/NJ", note:""},
+  {spot:"7A9", cage:"722171", label:"768(R1179C)♂ x FVB ♀♀", cross:"R1179C x FVB/NJ", note:""},
+  // flx-16 RC holding M
+  {spot:"7G10",cage:"730012", label:"702(fRC/WT)♂", cross:"flx-16-RC holding", note:""},
+  {spot:"7C3", cage:"712005", label:"714(fRC/WT)♂", cross:"flx-16-RC holding", note:""},
+  {spot:"7D9", cage:"731948", label:"708(fRC)♂", cross:"flx-16-RC holding", note:""},
+  {spot:"7E9", cage:"731949", label:"729(fRC)♂", cross:"flx-16-RC holding", note:""},
+  {spot:"7F9", cage:"731950", label:"720(fRC)♂", cross:"flx-16-RC holding", note:""},
+  // flx-16 WT x FVB
+  {spot:"7E6", cage:"726181", label:"774(fWT)♂ x FVB ♀♀", cross:"flx-16-WT x FVB/NJ", note:""},
+  {spot:"7D3", cage:"713459", label:"789 816 817 818 813 (fWT ♂x5)", cross:"flx-16-WT holding", note:""},
+  {spot:"7A3", cage:"733394", label:"792(fWT)♂", cross:"flx-16-WT holding", note:""},
+  // NEW lines
+  {spot:"7F5", cage:"732198", label:"NPY-hrGFP ♂ x FVB ♀", cross:"NPY-hrGFP x FVB/NJ", note:""},
+  {spot:"7G7", cage:"732199", label:"Vglut2-Cre ♂ x FVB ♀", cross:"Vglut2-Cre x FVB/NJ", note:""},
+  {spot:"7G6", cage:"729339", label:"Tac1-Cre ♂ x FVB ♀", cross:"Tac1-Cre x FVB/NJ", note:""},
+  {spot:"7G4", cage:"727179", label:"R26-CreERT2 ♂ x FVB ♀", cross:"R26-CreERT2 x FVB/NJ", note:""},
+  {spot:"7G3", cage:"731951", label:"R26-CreERT2 ♂ x FVB ♀", cross:"R26-CreERT2 x FVB/NJ", note:""},
+  {spot:"7G5", cage:"727186", label:"Ai32-ChR2 ♂ x FVB ♀", cross:"Ai32 x FVB/NJ", note:""},
+  {spot:"7E3", cage:"727190", label:"Ai14-tdT ♂ x FVB ♀", cross:"Ai14 x FVB/NJ", note:""},
+  {spot:"7B8", cage:"727183", label:"TRAP2 ♂ x FVB ♀", cross:"TRAP2 x FVB/NJ", note:""},
+  {spot:"7F3", cage:"735544", label:"Agrp-Cre planning", cross:"Agrp-Cre x FVB/NJ", note:"add FVB"},
+  // holding
+  {spot:"7E10",cage:"730543", label:"5♂ (2/24/26)", cross:"holding", note:""},
+  {spot:"7F10",cage:"730545", label:"5♂ (2/24/26)", cross:"holding", note:""},
+  {spot:"7C7", cage:"730544", label:"5♂ (2/24/26)", cross:"holding", note:""},
+  // FVB/NJ stock
+  {spot:"7A1", cage:"722746", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7A2", cage:"722752", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7B1", cage:"722761", label:"4♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7B2", cage:"722756", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7C1", cage:"722744", label:"4♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7C2", cage:"722748", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7D1", cage:"722751", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7D2", cage:"722743", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7A6", cage:"713887", label:"3♀ FVB/NJ (9/30/25)", cross:"FVB/NJ stock", note:""},
+  {spot:"7C4", cage:"730532", label:"5♀ FVB/NJ (2/24/26)", cross:"FVB/NJ stock", note:""},
+  {spot:"7B10",cage:"730534", label:"5♀ FVB/NJ (2/24/26)", cross:"FVB/NJ stock", note:""},
+  {spot:"7D10",cage:"730531", label:"5♀ FVB/NJ (2/24/26)", cross:"FVB/NJ stock", note:""},
+  {spot:"7G9", cage:"730533", label:"5♀ FVB/NJ (2/24/26)", cross:"FVB/NJ stock", note:""},
+  {spot:"7E1", cage:"722754", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7E2", cage:"722747", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7F1", cage:"722753", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7F2", cage:"722750", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7G1", cage:"722758", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7G2", cage:"722741", label:"5♀ FVB/NJ", cross:"FVB/NJ stock", note:""},
+  {spot:"7A5", cage:"727185", label:"5♀ FVB/NJ (2/3/26)", cross:"FVB/NJ stock", note:""},
+  {spot:"6A7", cage:"727184", label:"5♀ FVB/NJ (2/3/26)", cross:"FVB/NJ stock", note:"backcross"},
+  // E27X x E27X rotation
+  {spot:"6H4", cage:"733396", label:"909(E27X)♂ x 216♀ 218♀", cross:"E27X x E27X", note:"rotate 5/21"},
+];
+
+/* ───────────── rack layout ───────────── */
+const ROWS = [1,2,3,4,5,6,7,8,9,10];
+const D7 = ["A","B","C","D","E","F","G"];
+const D6 = ["H","I","J","K","L","M"];
+const DORM_PREFIX = col => D7.includes(col) ? "7" : "6";
+
+/* ───────────── helpers ───────────── */
+const uid = (() => { let n=0; return ()=>`m${Date.now().toString(36)}${(n++).toString(36)}`; })();
+
+const calcAgeWks = dob => {
+  if(!dob) return "";
+  // parse M/D/YY or M/D/YYYY
+  const m = dob.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if(!m) return "";
+  const yr = +m[3] < 100 ? 2000+ +m[3] : +m[3];
+  const d = new Date(yr, +m[1]-1, +m[2]);
+  if(isNaN(d)) return "";
+  const today = new Date("2026-05-27");
+  return ((today - d)/(7*24*3600*1000)).toFixed(2);
+};
+
+const exportCSV = (mice, breeders) => {
+  const hdr = "type,id,sex,geno,cage,spot,dob,litter,cross,parents,notes,label";
+  const mouseRows = mice.map(m => [
+    "mouse", m.id, m.sex, m.geno, m.cage, m.spot, m.dob, m.litter, m.cross, m.parents, m.notes, ""
+  ]);
+  const breederRows = breeders.map(b => [
+    "breeder", "", "", "", b.cage, b.spot, "", "", b.cross, "", b.note, b.label
+  ]);
+  const allRows = [...mouseRows, ...breederRows];
+  const csv = [hdr, ...allRows.map(r => r.map(v => `"${String(v||"").replace(/"/g,'""')}"`).join(","))].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(blob),
+    download: `colony_${new Date().toISOString().slice(0,10)}.csv`
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+/* ───────────── small components ───────────── */
+const GenoTag = ({geno, count, compact}) => {
+  const {color, bg, label} = genoInfo(geno);
+  return <span style={{
+    background:bg, border:`1px solid ${color}55`, color, borderRadius:"4px",
+    padding:"1px 6px", fontSize:compact?"9px":"10px", fontWeight:700,
+    fontFamily:"DM Mono,monospace", display:"inline-block", margin:"1px"
+  }}>{label}{count!==undefined?` ${count}`:""}</span>;
+};
+
+const GenoBar = ({mice, compact, showSex}) => {
+  // group by geno, then split by sex if showSex
+  const groups = {};
+  mice.forEach(m => {
+    if(!groups[m.geno]) groups[m.geno] = {F:0,M:0,Total:0};
+    if(m.sex==="F") groups[m.geno].F++;
+    else if(m.sex==="M") groups[m.geno].M++;
+    groups[m.geno].Total++;
+  });
+  return <div style={{display:"flex", flexWrap:"wrap", gap:"2px"}}>
+    {Object.entries(groups).map(([g, c]) => {
+      const {color, bg, label} = genoInfo(g);
+      return <span key={g} style={{
+        background:bg, border:`1px solid ${color}55`, color, borderRadius:"4px",
+        padding:"1px 6px", fontSize:compact?"9px":"10px", fontWeight:700,
+        fontFamily:"DM Mono,monospace", display:"inline-flex", gap:"4px", alignItems:"center"
+      }}>
+        <span>{label}</span>
+        {showSex
+          ? <span style={{fontSize:"9px", opacity:0.85}}>
+              <span style={{color:T.pink}}>♀{c.F}</span>
+              <span style={{margin:"0 2px"}}>·</span>
+              <span style={{color:T.blue}}>♂{c.M}</span>
+            </span>
+          : <span style={{opacity:0.7}}>{c.Total}</span>}
+      </span>;
+    })}
+  </div>;
+};
+
+const MousePill = ({mouse, onClick, dim}) => {
+  const {color, bg, label} = genoInfo(mouse.geno);
+  const pend = mouse.geno==="pending"||mouse.geno==="?";
+  return <span
+    onClick={onClick}
+    title={`${mouse.id} | ${mouse.sex} | ${mouse.geno}${mouse.notes?" | "+mouse.notes:""}`}
+    style={{
+      display:"inline-flex", alignItems:"center", gap:"3px", background:bg,
+      border:`1px solid ${color}44`, borderRadius:"4px", padding:"2px 7px",
+      margin:"1px", fontSize:"10px", color:T.text, whiteSpace:"nowrap",
+      fontFamily:"DM Mono,monospace", cursor:onClick?"pointer":"default",
+      opacity:dim?0.5:pend?0.78:1, transition:"all 0.1s"
+    }}
+    onMouseEnter={e => onClick && (e.currentTarget.style.transform="translateY(-1px)") && (e.currentTarget.style.boxShadow="0 2px 6px #0002")}
+    onMouseLeave={e => onClick && (e.currentTarget.style.transform="translateY(0)") && (e.currentTarget.style.boxShadow="none")}
+  >
+    <span style={{color:mouse.sex==="F"?T.pink:mouse.sex==="M"?T.blue:T.textSoft, fontWeight:700, fontSize:"9px"}}>
+      {mouse.sex==="F"?"♀":mouse.sex==="M"?"♂":"?"}
+    </span>
+    <span style={{fontWeight:600, color:T.header}}>{mouse.id}</span>
+    <span style={{color, fontSize:"9px"}}>{label}</span>
+    {mouse.notes && <span title={mouse.notes} style={{color:"#f59e0b", fontSize:"9px"}}>!</span>}
+  </span>;
+};
+
+/* ───────────── edit modal ───────────── */
+const EditMouseModal = ({mouse, onSave, onCancel, onDelete, descByCage}) => {
+  const [m, setM] = useState({...mouse});
+  const isNew = !mouse.id;
+  return <div style={{
+    position:"fixed", inset:0, background:"#0f172a99", display:"flex",
+    alignItems:"center", justifyContent:"center", zIndex:1000, padding:"20px"
+  }} onClick={onCancel}>
+    <div onClick={e=>e.stopPropagation()} style={{
+      background:T.surface, borderRadius:"12px", padding:"22px 24px",
+      width:"100%", maxWidth:"480px", boxShadow:"0 20px 60px #0003",
+      maxHeight:"90vh", overflowY:"auto"
+    }}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"16px"}}>
+        <h3 style={{margin:0, fontFamily:"Syne,sans-serif", fontSize:"17px", color:T.header}}>
+          {isNew ? "Add new mouse" : `Edit ${mouse.id}`}
+        </h3>
+        <button onClick={onCancel} style={{background:"none", border:"none", cursor:"pointer", color:T.textSoft}}>
+          <X size={18}/>
+        </button>
+      </div>
+      <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px"}}>
+        <Field label="Mouse ID" value={m.id} onChange={v=>setM({...m,id:v})}/>
+        <Field label="Sex" value={m.sex} onChange={v=>setM({...m,sex:v})} select={["F","M","?"]}/>
+        <Field label="Cage ID" value={m.cage} onChange={v=>setM({...m,cage:v})}/>
+        <SpotPicker label="Rack Spot" value={m.spot} onChange={v=>setM({...m,spot:v})}
+          descByCage={descByCage} currentCage={m.cage}/>
+        <Field label="DOB (M/D/YY)" value={m.dob} onChange={v=>setM({...m,dob:v})}/>
+        <Field label="Litter ID" value={m.litter} onChange={v=>setM({...m,litter:v})}/>
+        <div style={{gridColumn:"1 / -1"}}>
+          <Field label="Genotype" value={m.geno} onChange={v=>setM({...m,geno:v})} select={GENO_CATALOG.map(g=>g.key)}/>
+        </div>
+        <div style={{gridColumn:"1 / -1"}}>
+          <Field label="Cross" value={m.cross} onChange={v=>setM({...m,cross:v})}/>
+        </div>
+        <div style={{gridColumn:"1 / -1"}}>
+          <Field label="Parents" value={m.parents} onChange={v=>setM({...m,parents:v})}/>
+        </div>
+        <div style={{gridColumn:"1 / -1"}}>
+          <Field label="Notes" value={m.notes} onChange={v=>setM({...m,notes:v})}/>
+        </div>
+      </div>
+      <div style={{display:"flex", justifyContent:"space-between", marginTop:"18px", gap:"8px"}}>
+        {!isNew && <button onClick={()=>onDelete(mouse)} style={{
+          background:"#fef2f2", border:"1px solid #fca5a5", color:"#b91c1c",
+          borderRadius:"7px", padding:"7px 14px", cursor:"pointer",
+          fontSize:"11px", fontFamily:"inherit", fontWeight:600,
+          display:"inline-flex", alignItems:"center", gap:"5px"
+        }}><Trash2 size={13}/> Delete</button>}
+        <div style={{display:"flex", gap:"8px", marginLeft:"auto"}}>
+          <button onClick={onCancel} style={{
+            background:T.surfaceAlt, border:`1px solid ${T.border}`, color:T.textMid,
+            borderRadius:"7px", padding:"7px 14px", cursor:"pointer",
+            fontSize:"11px", fontFamily:"inherit", fontWeight:600
+          }}>Cancel</button>
+          <button onClick={()=>onSave(isNew ? {...m, _id:uid()} : m)} style={{
+            background:T.accent, border:`1px solid ${T.accent}`, color:"#fff",
+            borderRadius:"7px", padding:"7px 14px", cursor:"pointer",
+            fontSize:"11px", fontFamily:"inherit", fontWeight:700,
+            display:"inline-flex", alignItems:"center", gap:"5px"
+          }}><Save size={13}/> Save</button>
+        </div>
+      </div>
+    </div>
+  </div>;
+};
+
+/* ───────────── edit-cage modal ─────────────
+   A "cage" record here unifies breeders + weaned cages. The modal can:
+   - rename the cage number
+   - move the cage's spot (which moves all its mice + its breeder record)
+   - edit the cross/label/notes
+   - delete the cage (removes breeder + all weaned mice at that cage)
+*/
+const EditCageModal = ({cage, onSave, onCancel, onDelete, descByCage, allCrosses}) => {
+  const [c, setC] = useState({...cage});
+  const isNew = !cage.cage && !cage.spot;
+  return <div style={{
+    position:"fixed", inset:0, background:"#0f172a99", display:"flex",
+    alignItems:"center", justifyContent:"center", zIndex:1000, padding:"20px"
+  }} onClick={onCancel}>
+    <div onClick={e=>e.stopPropagation()} style={{
+      background:T.surface, borderRadius:"12px", padding:"22px 24px",
+      width:"100%", maxWidth:"520px", boxShadow:"0 20px 60px #0003",
+      maxHeight:"90vh", overflowY:"auto"
+    }}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"6px"}}>
+        <h3 style={{margin:0, fontFamily:"Syne,sans-serif", fontSize:"17px", color:T.header}}>
+          {isNew ? "Add new cage" : `Edit cage ${cage.cage || "?"}`}
+        </h3>
+        <button onClick={onCancel} style={{background:"none", border:"none", cursor:"pointer", color:T.textSoft}}>
+          <X size={18}/>
+        </button>
+      </div>
+      <div style={{fontSize:"10px", color:T.textSoft, fontFamily:"DM Mono,monospace", marginBottom:"14px"}}>
+        {cage.kind==="weaned"
+          ? `${cage.miceCount||0} weaned mouse${cage.miceCount===1?"":"s"} live here — moving spot moves them all.`
+          : isNew ? "Created as a breeder/holding record." : "Breeder / holding cage."}
+      </div>
+      <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px"}}>
+        <Field label="Cage ID (number)" value={c.cage} onChange={v=>setC({...c,cage:v})}/>
+        <SpotPicker label="Rack Spot" value={c.spot} onChange={v=>setC({...c,spot:v})}
+          descByCage={descByCage} currentCage={c.cage}/>
+        <div style={{gridColumn:"1 / -1"}}>
+          <Field label="Cross / line" value={c.cross} onChange={v=>setC({...c,cross:v})}
+            select={allCrosses}/>
+        </div>
+        <div style={{gridColumn:"1 / -1"}}>
+          <Field label="Label (breeder pairings, descriptions)" value={c.label} onChange={v=>setC({...c,label:v})}/>
+        </div>
+        <div style={{gridColumn:"1 / -1"}}>
+          <Field label="Notes / flags" value={c.note} onChange={v=>setC({...c,note:v})}/>
+        </div>
+      </div>
+      <div style={{display:"flex", justifyContent:"space-between", marginTop:"18px", gap:"8px"}}>
+        {!isNew && <button onClick={()=>onDelete(cage)} style={{
+          background:"#fef2f2", border:"1px solid #fca5a5", color:"#b91c1c",
+          borderRadius:"7px", padding:"7px 14px", cursor:"pointer",
+          fontSize:"11px", fontFamily:"inherit", fontWeight:600,
+          display:"inline-flex", alignItems:"center", gap:"5px"
+        }}><Trash2 size={13}/> Delete cage{cage.kind==="weaned" && cage.miceCount ? ` (+${cage.miceCount} mice)` : ""}</button>}
+        <div style={{display:"flex", gap:"8px", marginLeft:"auto"}}>
+          <button onClick={onCancel} style={{
+            background:T.surfaceAlt, border:`1px solid ${T.border}`, color:T.textMid,
+            borderRadius:"7px", padding:"7px 14px", cursor:"pointer",
+            fontSize:"11px", fontFamily:"inherit", fontWeight:600
+          }}>Cancel</button>
+          <button onClick={()=>onSave(c)} style={{
+            background:T.accent, border:`1px solid ${T.accent}`, color:"#fff",
+            borderRadius:"7px", padding:"7px 14px", cursor:"pointer",
+            fontSize:"11px", fontFamily:"inherit", fontWeight:700,
+            display:"inline-flex", alignItems:"center", gap:"5px"
+          }}><Save size={13}/> Save</button>
+        </div>
+      </div>
+    </div>
+  </div>;
+};
+
+const Field = ({label, value, onChange, select}) => (
+  <div>
+    <div style={{fontSize:"9px", color:T.textSoft, fontFamily:"Syne,sans-serif",
+      fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:"3px"}}>{label}</div>
+    {select
+      ? <select value={value||""} onChange={e=>onChange(e.target.value)} style={inputStyle}>
+          {!select.includes(value)&&<option value={value||""}>{value||""}</option>}
+          {select.map(o=><option key={o} value={o}>{o}</option>)}
+        </select>
+      : <input value={value||""} onChange={e=>onChange(e.target.value)} style={inputStyle}/>
+    }
+  </div>
+);
+const inputStyle = {
+  background:T.surface, border:`1px solid ${T.border}`, color:T.text,
+  borderRadius:"6px", padding:"6px 9px", fontSize:"11px",
+  fontFamily:"DM Mono,monospace", outline:"none", width:"100%",
+  boxSizing:"border-box"
+};
+
+/* ───────────── spot picker (combobox) ───────────── */
+const SpotPicker = ({label, value, onChange, knownSpots, descByCage, currentCage}) => {
+  const allSpotKeys = useMemo(() => {
+    const set = new Set();
+    D7.forEach(c => ROWS.forEach(r => set.add(`7${c}${r}`)));
+    D6.forEach(c => ROWS.forEach(r => set.add(`6${c}${r}`)));
+    return [...set];
+  }, []);
+  return <div>
+    <div style={{fontSize:"9px", color:T.textSoft, fontFamily:"Syne,sans-serif",
+      fontWeight:700, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:"3px"}}>{label}</div>
+    <div style={{display:"flex", gap:"6px"}}>
+      <input value={value||""} onChange={e=>onChange(e.target.value.toUpperCase())}
+        list="all-spots" placeholder="e.g. 7G8"
+        style={{...inputStyle, flex:1}}/>
+      <datalist id="all-spots">
+        {allSpotKeys.map(s => {
+          const occ = descByCage && descByCage[s];
+          return <option key={s} value={s}>{occ ? `${s} — ${occ}` : s}</option>;
+        })}
+      </datalist>
+    </div>
+    {value && descByCage && descByCage[value] && descByCage[value] !== currentCage && (
+      <div style={{fontSize:"9px", color:"#b45309", marginTop:"3px", fontFamily:"DM Mono,monospace"}}>
+        ⚠ {value} already has: {descByCage[value]}
+      </div>
+    )}
+  </div>;
+};
+
+/* ───────────── litter card ───────────── */
+const LitterCard = ({litter, expanded, onToggle, onEditMouse}) => {
+  const byCage = {};
+  litter.mice.forEach(m => {
+    const k = m.spot || "TBD";
+    if(!byCage[k]) byCage[k] = [];
+    byCage[k].push(m);
+  });
+  const F = litter.mice.filter(m=>m.sex==="F").length;
+  const M = litter.mice.filter(m=>m.sex==="M").length;
+  const pend = litter.mice.filter(m=>m.geno==="pending"||m.geno==="?").length;
+  return <div onClick={onToggle} style={{
+    background:T.surface, border:`1px solid ${expanded?"#93c5fd":T.border}`,
+    borderRadius:"10px", padding:"12px 14px", cursor:"pointer", marginBottom:"8px",
+    transition:"all 0.15s",
+    boxShadow:expanded?"0 0 0 3px #dbeafe, 0 2px 8px #0001":"0 1px 3px #0000000d",
+    borderTop:expanded?"3px solid #2563eb":"3px solid transparent"
+  }}>
+    <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start"}}>
+      <div>
+        <div style={{display:"flex", alignItems:"center", gap:"6px"}}>
+          <span style={{color:T.header, fontFamily:"DM Mono,monospace", fontWeight:700, fontSize:"13px"}}>{litter.id}</span>
+          {pend>0 && <span style={{background:"#fffbeb", border:"1px solid #fbbf24", color:"#92400e",
+            borderRadius:"4px", padding:"0 5px", fontSize:"8px", fontWeight:700}}>! {pend} pending</span>}
+        </div>
+        <div style={{color:T.textMid, fontSize:"10px", fontFamily:"DM Mono,monospace", marginTop:"2px"}}>{litter.cross}</div>
+        <div style={{color:T.textSoft, fontSize:"10px", marginTop:"1px"}}>{litter.parents}</div>
+      </div>
+      <div style={{textAlign:"right", flexShrink:0}}>
+        <div style={{color:T.textSoft, fontSize:"9px", fontFamily:"DM Mono,monospace"}}>DOB {litter.dob}</div>
+        <div style={{display:"flex", gap:"6px", justifyContent:"flex-end", marginTop:"3px"}}>
+          <span style={{color:T.pink, fontSize:"10px", fontWeight:600}}>♀{F}</span>
+          <span style={{color:T.blue, fontSize:"10px", fontWeight:600}}>♂{M}</span>
+          <span style={{color:T.textSoft, fontSize:"10px"}}>n={litter.mice.length}</span>
+        </div>
+      </div>
+    </div>
+    <div style={{marginTop:"8px"}}><GenoBar mice={litter.mice} showSex/></div>
+    {expanded && <div style={{marginTop:"12px", borderTop:`1px solid ${T.border}`, paddingTop:"12px"}} onClick={e=>e.stopPropagation()}>
+      {Object.entries(byCage).sort().map(([spot, mice]) => (
+        <div key={spot} style={{
+          background:T.surfaceAlt, border:`1px solid ${T.border}`,
+          borderLeft:"3px solid #93c5fd", borderRadius:"6px",
+          padding:"8px 10px", marginBottom:"6px"
+        }}>
+          <div style={{display:"flex", justifyContent:"space-between", marginBottom:"5px"}}>
+            <span style={{color:T.accent, fontFamily:"DM Mono,monospace", fontSize:"11px", fontWeight:700}}>Spot {spot}</span>
+            <span style={{color:T.textSoft, fontSize:"9px", fontFamily:"DM Mono,monospace"}}>cage {mice[0]?.cage} · {mice.length} mice</span>
+          </div>
+          <GenoBar mice={mice} compact showSex/>
+          <div style={{display:"flex", flexWrap:"wrap", marginTop:"5px"}}>
+            {mice.map(m => <MousePill key={m._id} mouse={m} onClick={()=>onEditMouse(m)}/>)}
+          </div>
+        </div>
+      ))}
+    </div>}
+  </div>;
+};
+
+/* ───────────── rack cell ───────────── */
+const RackCell = ({spotKey, spotMap, breeders, onHover, hovered,
+                   onClickCell, onDragStartSpot, onDropOnSpot,
+                   dragSource, dragOver, setDragOver}) => {
+  const mice = spotMap[spotKey] || [];
+  const breeder = breeders[spotKey];
+  const active = mice.length>0 || !!breeder;
+  const isHov = hovered === spotKey;
+  const isDragSrc = dragSource === spotKey;
+  const isDropTarget = dragOver === spotKey && dragSource && dragSource !== spotKey;
+  const bg = isDropTarget ? "#fef3c7"
+    : isDragSrc ? "#e0e7ff"
+    : !active ? "#f8fafc"
+    : isHov ? "#dbeafe"
+    : mice.length>0 ? "#f0fdf4"
+    : crossBg(breeder?.cross || "");
+  const brd = isDropTarget ? "#f59e0b"
+    : isDragSrc ? "#6366f1"
+    : !active ? "#e2e8f0"
+    : isHov ? "#3b82f6"
+    : mice.length>0 ? "#86efac"
+    : crossBorder(breeder?.cross || "");
+  const cageNum = breeder?.cage || (mice.length>0 ? mice[0].cage : null);
+  return <div
+    draggable={active}
+    onDragStart={e => {
+      if(!active) return;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", spotKey);
+      onDragStartSpot(spotKey);
+    }}
+    onDragEnd={() => { onDragStartSpot(null); setDragOver(null); }}
+    onDragOver={e => {
+      if(!dragSource || dragSource===spotKey) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if(dragOver !== spotKey) setDragOver(spotKey);
+    }}
+    onDragLeave={() => { if(dragOver===spotKey) setDragOver(null); }}
+    onDrop={e => {
+      e.preventDefault();
+      const from = e.dataTransfer.getData("text/plain") || dragSource;
+      setDragOver(null);
+      onDragStartSpot(null);
+      if(from && from !== spotKey) onDropOnSpot(from, spotKey);
+    }}
+    onMouseEnter={()=>active && onHover(spotKey)}
+    onMouseLeave={()=>onHover(null)}
+    onClick={() => active && onClickCell && onClickCell(spotKey)}
+    title={active ? "Click to edit · drag to move/swap" : ""}
+    style={{
+      width:"100%", minHeight:"44px", background:bg, border:`1px solid ${brd}`,
+      borderRadius:"3px", cursor:active?"grab":"default",
+      display:"flex", flexDirection:"column", alignItems:"center",
+      justifyContent:"center", padding:"2px", transition:"all 0.1s",
+      overflow:"hidden",
+      opacity: isDragSrc ? 0.5 : 1
+    }}>
+    <div style={{fontSize:"7px", color:active?"#94a3b8":"#e2e8f0",
+      fontFamily:"DM Mono,monospace", lineHeight:1.1, textAlign:"center"}}>{spotKey}</div>
+    {cageNum && <div style={{fontSize:"7px", color:active?"#1e3a5f":"#cbd5e1",
+      fontFamily:"DM Mono,monospace", fontWeight:700, lineHeight:1.2, textAlign:"center"}}>{cageNum}</div>}
+    {mice.length>0 && <>
+      <div style={{fontSize:"8px", color:"#15803d", fontWeight:700}}>{mice.length}🐭</div>
+      <div style={{display:"flex", flexWrap:"wrap", gap:"1px", justifyContent:"center"}}>
+        {mice.slice(0,8).map((m,i) => <div key={i} style={{
+          width:"5px", height:"5px", borderRadius:"50%",
+          background:genoInfo(m.geno).color
+        }}/>)}
+      </div>
+    </>}
+    {!mice.length && breeder && <div style={{fontSize:"7px", color:"#475569",
+      textAlign:"center", lineHeight:1.1, padding:"0 1px", marginTop:"1px"}}>
+      {breeder.cross.split("x")[0].trim().substring(0,9)}
+    </div>}
+  </div>;
+};
+
+/* ───────────── cage list ───────────── */
+const CageList = ({spotMap, breeders, onEditMouse, onEditCage}) => {
+  const [cageSearch, setCageSearch] = useState("");
+  const rows = useMemo(() => {
+    const map = {};
+    breeders.forEach(b => {
+      if(!map[b.cage]) map[b.cage] = {cage:b.cage, spot:b.spot, cross:b.cross,
+        label:b.label, note:b.note, type:"breeder", kind:"breeder", mice:[]};
+    });
+    Object.entries(spotMap).forEach(([spot, mice]) => {
+      const cageId = mice[0]?.cage;
+      if(!cageId) return;
+      if(!map[cageId]) map[cageId] = {cage:cageId, spot, cross:mice[0]?.cross||"",
+        label:"", note:"", type:"weaned", kind:"weaned", mice:[]};
+      map[cageId].mice = mice;
+      map[cageId].spot = spot;
+      if(!map[cageId].cross) map[cageId].cross = mice[0]?.cross||"";
+    });
+    return Object.values(map).map(r => ({...r, miceCount:r.mice.length})).sort((a,b) =>
+      a.spot.localeCompare(b.spot, undefined, {numeric:true}));
+  }, [spotMap, breeders]);
+  const filtered = cageSearch
+    ? rows.filter(r => [r.cage, r.spot, r.cross, r.label, r.note,
+        ...r.mice.map(m=>m.id), ...r.mice.map(m=>m.geno)].join(" ").toLowerCase()
+        .includes(cageSearch.toLowerCase()))
+    : rows;
+  return <div style={{marginTop:"24px"}}>
+    <div style={{fontFamily:"Syne,sans-serif", fontSize:"11px", fontWeight:700,
+      color:T.textMid, letterSpacing:"0.1em", textTransform:"uppercase",
+      marginBottom:"10px", borderBottom:`2px solid ${T.border}`, paddingBottom:"5px",
+      display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+      <span>All Cages ({rows.length})</span>
+      <div style={{position:"relative"}}>
+        <Search size={11} style={{position:"absolute", left:"8px", top:"50%",
+          transform:"translateY(-50%)", color:T.textSoft}}/>
+        <input placeholder="Search cage, spot, animal, genotype..."
+          value={cageSearch} onChange={e=>setCageSearch(e.target.value)}
+          onClick={e=>e.stopPropagation()}
+          style={{...inputStyle, paddingLeft:"24px", width:"260px"}}/>
+      </div>
+    </div>
+    <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(330px,1fr))", gap:"6px"}}>
+      {filtered.map(row => {
+        const isWeaned = row.mice.length>0;
+        const isFVB = row.cross.toLowerCase().includes("fvb/nj stock");
+        const accent = isFVB?"#1d4ed8":isWeaned?"#15803d":"#475569";
+        const bgColor = isFVB?"#dbeafe":isWeaned?"#f0fdf4":crossBg(row.cross);
+        const bdrColor = isFVB?"#93c5fd":isWeaned?"#86efac":crossBorder(row.cross);
+        return <div key={row.cage+row.spot} style={{
+          background:T.surface, border:`1px solid ${bdrColor}`,
+          borderLeft:`3px solid ${accent}`, borderRadius:"7px", padding:"8px 10px"
+        }}>
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"4px"}}>
+            <div style={{display:"flex", alignItems:"center", gap:"6px"}}>
+              <span style={{fontFamily:"DM Mono,monospace", fontWeight:700, fontSize:"12px", color:T.header}}>{row.cage}</span>
+              <span style={{background:bgColor, border:`1px solid ${bdrColor}`, color:accent,
+                borderRadius:"3px", padding:"0 5px", fontSize:"8px",
+                fontFamily:"DM Mono,monospace", fontWeight:700}}>{row.spot}</span>
+              {isWeaned && <span style={{background:"#f0fdf4", border:"1px solid #86efac",
+                color:"#15803d", borderRadius:"3px", padding:"0 5px",
+                fontSize:"8px", fontWeight:700}}>weaned</span>}
+            </div>
+            <div style={{display:"flex", gap:"4px", alignItems:"center"}}>
+              {row.note && <span style={{color:"#d97706", fontSize:"9px",
+                fontFamily:"DM Mono,monospace"}}>⚑ {row.note}</span>}
+              <button onClick={()=>onEditCage(row)} title="Edit / move this cage"
+                style={{background:"#eff6ff", border:"1px solid #bfdbfe",
+                color:T.accent, borderRadius:"4px", padding:"2px 6px", cursor:"pointer",
+                fontSize:"9px", fontFamily:"inherit", fontWeight:700,
+                display:"inline-flex", alignItems:"center", gap:"3px"}}>
+                <Edit2 size={9}/> Edit
+              </button>
+            </div>
+          </div>
+          <div style={{color:T.textMid, fontSize:"9px", fontFamily:"DM Mono,monospace", marginBottom:"4px"}}>{row.cross}</div>
+          {row.label && !isWeaned && <div style={{color:T.textSoft, fontSize:"9px",
+            fontFamily:"DM Mono,monospace", marginBottom:"4px"}}>{row.label}</div>}
+          {isWeaned && <>
+            <GenoBar mice={row.mice} compact showSex/>
+            <div style={{display:"flex", flexWrap:"wrap", marginTop:"4px"}}>
+              {row.mice.map(m => <MousePill key={m._id} mouse={m} onClick={()=>onEditMouse(m)}/>)}
+            </div>
+          </>}
+        </div>;
+      })}
+    </div>
+  </div>;
+};
+
+/* ───────────── rack map ───────────── */
+const RackMap = ({spotMap, breedersMap, breeders, onEditMouse, onEditCage, onMoveCageSpot}) => {
+  const [hov, setHov] = useState(null);
+  const [dragSource, setDragSource] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+  const hovMice = hov ? (spotMap[hov] || []) : [];
+  const hovB = hov ? breedersMap[hov] : null;
+
+  const handleClickCell = (spotKey) => {
+    // Build a cage record for the modal from whatever lives at this spot
+    const m = spotMap[spotKey] || [];
+    const b = breedersMap[spotKey];
+    if(b) {
+      onEditCage({...b, kind:"breeder", miceCount:m.length});
+    } else if(m.length) {
+      onEditCage({
+        cage: m[0].cage, spot: spotKey, cross: m[0].cross || "",
+        label:"", note:"", kind:"weaned", miceCount: m.length
+      });
+    }
+  };
+
+  const renderDorm = (cols, title, subtitle) => (
+    <div style={{flex:1, minWidth:0}}>
+      <div style={{fontFamily:"Syne,sans-serif", fontSize:"12px", fontWeight:700,
+        color:T.textMid, letterSpacing:"0.1em", textTransform:"uppercase",
+        marginBottom:"8px", borderBottom:`2px solid ${T.border}`, paddingBottom:"5px",
+        display:"flex", justifyContent:"space-between", alignItems:"baseline"}}>
+        <span>{title}</span>
+        <span style={{fontSize:"9px", color:T.textSoft, letterSpacing:"0", textTransform:"none"}}>{subtitle}</span>
+      </div>
+      <div style={{display:"grid", gridTemplateColumns:`18px repeat(${cols.length},1fr)`, gap:"2px"}}>
+        <div/>
+        {cols.map(c => <div key={c} style={{textAlign:"center", fontSize:"9px",
+          color:T.textSoft, fontFamily:"DM Mono,monospace", fontWeight:700, paddingBottom:"2px"}}>{c}</div>)}
+        {ROWS.map(row => <div key={`row${row}`} style={{display:"contents"}}>
+          <div style={{display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:"9px", color:T.textSoft, fontFamily:"DM Mono,monospace", fontWeight:700}}>{row}</div>
+          {cols.map(col => {
+            const k = `${DORM_PREFIX(col)}${col}${row}`;
+            return <RackCell key={k} spotKey={k} spotMap={spotMap}
+              breeders={breedersMap} onHover={setHov} hovered={hov}
+              onClickCell={handleClickCell}
+              onDragStartSpot={setDragSource}
+              onDropOnSpot={onMoveCageSpot}
+              dragSource={dragSource}
+              dragOver={dragOver}
+              setDragOver={setDragOver}/>;
+          })}
+        </div>)}
+      </div>
+    </div>
+  );
+  return <div>
+    <div style={{fontSize:"10px", color:T.textSoft, fontFamily:"DM Mono,monospace",
+      marginBottom:"10px", padding:"6px 10px", background:"#eff6ff",
+      border:"1px solid #bfdbfe", borderRadius:"6px", display:"inline-block"}}>
+      💡 Click a cage to edit · Drag a cage to move or swap with another spot
+    </div>
+    <div style={{display:"flex", gap:"24px", flexWrap:"wrap"}}>
+      {renderDorm(D7, "Dorm 7", "A–G  ·  experimental")}
+      {renderDorm(D6, "Dorm 6", "H–M  ·  production")}
+    </div>
+    {hov && (hovMice.length>0 || hovB) && <div style={{
+      marginTop:"16px", background:T.surface, border:`1px solid ${T.accentBorder}`,
+      borderRadius:"10px", padding:"14px 16px", boxShadow:"0 4px 16px #0000001a"
+    }}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:"8px"}}>
+        <span style={{fontFamily:"DM Mono,monospace", color:T.accent, fontWeight:700, fontSize:"14px"}}>{hov}</span>
+        {hovB && <span style={{background:crossBg(hovB.cross),
+          border:`1px solid ${crossBorder(hovB.cross)}`, color:T.textMid,
+          borderRadius:"4px", padding:"2px 8px", fontSize:"10px",
+          fontFamily:"DM Mono,monospace"}}>{hovB.cross}</span>}
+      </div>
+      {hovB && <div style={{color:T.textMid, fontSize:"11px", marginBottom:"6px",
+        fontFamily:"DM Mono,monospace"}}>{hovB.label}
+        {hovB.note && <span style={{color:"#d97706", marginLeft:"8px", fontSize:"10px"}}>! {hovB.note}</span>}
+      </div>}
+      {hovMice.length>0 && <>
+        <div style={{color:"#15803d", fontSize:"11px", fontWeight:700,
+          marginBottom:"6px", fontFamily:"Syne,sans-serif"}}>Weaned Mice ({hovMice.length})</div>
+        <GenoBar mice={hovMice} showSex/>
+        <div style={{display:"flex", flexWrap:"wrap", marginTop:"6px"}}>
+          {hovMice.map(m => <MousePill key={m._id} mouse={m} onClick={()=>onEditMouse(m)}/>)}
+        </div>
+        <div style={{color:T.textSoft, fontSize:"9px", marginTop:"6px", fontFamily:"DM Mono,monospace"}}>
+          Litters: {[...new Set(hovMice.map(m=>m.litter))].join(" · ")}
+        </div>
+      </>}
+    </div>}
+    <div style={{display:"flex", flexWrap:"wrap", gap:"8px", marginTop:"14px",
+      padding:"10px 12px", background:T.surface, borderRadius:"8px", border:`1px solid ${T.border}`}}>
+      {[["flx-16 RC × RC","#fee2e2","#fca5a5"],["flx-16 (RC × WT)","#dcfce7","#86efac"],
+        ["flx-3.4 / CreERT2","#ede9fe","#c4b5fd"],["E27X","#d1fae5","#6ee7b7"],
+        ["R579C / R1147C / R1179C","#fef9c3","#fde047"],["new transgene lines","#cffafe","#67e8f9"],
+        ["FVB/NJ stock","#dbeafe","#93c5fd"],["Holding","#f1f5f9","#cbd5e1"],
+        ["Weaned cage","#f0fdf4","#86efac"]].map(([label, bg, brd]) => (
+        <div key={label} style={{display:"flex", alignItems:"center", gap:"4px"}}>
+          <div style={{width:"12px", height:"12px", borderRadius:"2px",
+            background:bg, border:`1px solid ${brd}`}}/>
+          <span style={{fontSize:"10px", color:T.textMid, fontFamily:"DM Mono,monospace"}}>{label}</span>
+        </div>
+      ))}
+    </div>
+    <CageList spotMap={spotMap} breeders={breeders}
+      onEditMouse={onEditMouse} onEditCage={onEditCage}/>
+  </div>;
+};
+
+/* ───────────── stats panel ───────────── */
+const StatsPanel = ({mice}) => {
+  const stats = [
+    {label:"Total Mice", val:mice.length, color:"#15803d", bg:"#f0fdf4", brd:"#86efac"},
+    {label:"Females", val:mice.filter(m=>m.sex==="F").length, color:T.pink, bg:"#fdf2f8", brd:"#f9a8d4"},
+    {label:"Males", val:mice.filter(m=>m.sex==="M").length, color:T.blue, bg:"#eff6ff", brd:"#93c5fd"},
+    {label:"Pending Geno", val:mice.filter(m=>m.geno==="pending"||m.geno==="?").length, color:"#92400e", bg:"#fffbeb", brd:"#fde68a"},
+    {label:"flx/flx ★", val:mice.filter(m=>m.geno.includes("flx-exon-16-RC/flx-exon-16-WT")).length, color:"#b91c1c", bg:"#fef2f2", brd:"#fca5a5"},
+    {label:"f3.4/f3.4 ★", val:mice.filter(m=>m.geno==="flx-exon-3,4/flx-exon-3,4").length, color:"#a21caf", bg:"#fdf4ff", brd:"#f0abfc"},
+    {label:"E27X/+", val:mice.filter(m=>m.geno==="E27X/WT").length, color:"#0e7490", bg:"#ecfeff", brd:"#a5f3fc"},
+    {label:"R579C/+", val:mice.filter(m=>m.geno==="R579C/WT").length, color:"#854d0e", bg:"#fefce8", brd:"#fde047"},
+  ];
+  return <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",
+    gap:"8px", marginBottom:"16px"}}>
+    {stats.map(({label, val, color, bg, brd}) => (
+      <div key={label} style={{background:bg, border:`1px solid ${brd}`,
+        borderRadius:"10px", padding:"12px 14px", boxShadow:"0 1px 3px #0000000d"}}>
+        <div style={{color:T.textMid, fontSize:"9px", fontFamily:"Syne,sans-serif",
+          fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:"6px"}}>{label}</div>
+        <div style={{color, fontFamily:"DM Mono,monospace", fontSize:"26px", fontWeight:700, lineHeight:1}}>{val}</div>
+      </div>
+    ))}
+  </div>;
+};
+
+/* ───────────── genotype counts panel (sex-split) ───────────── */
+const GenotypeCountsPanel = ({mice}) => {
+  const counts = {};
+  mice.forEach(m => {
+    if(!counts[m.geno]) counts[m.geno] = {F:0, M:0, U:0, Total:0};
+    if(m.sex==="F") counts[m.geno].F++;
+    else if(m.sex==="M") counts[m.geno].M++;
+    else counts[m.geno].U++;
+    counts[m.geno].Total++;
+  });
+  const sorted = Object.entries(counts).sort((a,b)=>b[1].Total - a[1].Total);
+  return <div style={{background:T.surface, border:`1px solid ${T.border}`,
+    borderRadius:"10px", marginBottom:"16px", overflow:"hidden",
+    boxShadow:"0 1px 3px #0000000d"}}>
+    <div style={{background:T.surfaceAlt, padding:"10px 16px",
+      borderBottom:`1px solid ${T.border}`, fontFamily:"Syne,sans-serif",
+      fontSize:"12px", fontWeight:700, color:T.header, letterSpacing:"0.05em"}}>
+      Genotype × Sex Counts
+    </div>
+    <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))",
+      gap:"0", padding:"6px"}}>
+      {sorted.map(([g, c]) => {
+        const {color, bg, label} = genoInfo(g);
+        return <div key={g} style={{
+          background:bg, border:`1px solid ${color}33`, borderRadius:"7px",
+          padding:"9px 12px", margin:"4px",
+          display:"flex", justifyContent:"space-between", alignItems:"center"
+        }}>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{color, fontWeight:700, fontSize:"11px",
+              fontFamily:"DM Mono,monospace", marginBottom:"2px",
+              whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{label}</div>
+            <div style={{color:T.textSoft, fontSize:"9px",
+              fontFamily:"DM Mono,monospace"}}>{g}</div>
+          </div>
+          <div style={{display:"flex", gap:"8px", alignItems:"baseline", marginLeft:"10px"}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{color:T.pink, fontFamily:"DM Mono,monospace",
+                fontWeight:700, fontSize:"16px", lineHeight:1}}>{c.F}</div>
+              <div style={{color:T.pink, fontSize:"8px", letterSpacing:"0.05em",
+                fontFamily:"Syne,sans-serif", fontWeight:600}}>♀</div>
+            </div>
+            <div style={{textAlign:"center"}}>
+              <div style={{color:T.blue, fontFamily:"DM Mono,monospace",
+                fontWeight:700, fontSize:"16px", lineHeight:1}}>{c.M}</div>
+              <div style={{color:T.blue, fontSize:"8px",
+                fontFamily:"Syne,sans-serif", fontWeight:600}}>♂</div>
+            </div>
+            {c.U>0 && <div style={{textAlign:"center"}}>
+              <div style={{color:T.textSoft, fontFamily:"DM Mono,monospace",
+                fontWeight:700, fontSize:"14px", lineHeight:1}}>{c.U}</div>
+              <div style={{color:T.textSoft, fontSize:"8px",
+                fontFamily:"Syne,sans-serif", fontWeight:600}}>?</div>
+            </div>}
+          </div>
+        </div>;
+      })}
+    </div>
+  </div>;
+};
+
+/* ───────────── MAIN APP ───────────── */
+function App() {
+  const [mice, setMice] = useLocalState("colonyos.mice", () => SEED_MICE.map(m=>({...m, _id:uid()})));
+  const [breeders, setBreeders] = useLocalState("colonyos.breeders", () => SEED_BREEDERS);
+  const resetSeed = () => {
+    if(!confirm("Reset all data back to the 5/22/26 seed? This will discard your edits.")) return;
+    localStorage.removeItem("colonyos.mice");
+    localStorage.removeItem("colonyos.breeders");
+    setMice(SEED_MICE.map(m=>({...m, _id:uid()})));
+    setBreeders(SEED_BREEDERS);
+  };
+  const [view, setView] = useState("overview");
+  const [expanded, setExpanded] = useState(null);
+  const [filterCross, setFilterCross] = useState("all");
+  const [filterGeno, setFilterGeno] = useState("all");
+  const [search, setSearch] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [editingCage, setEditingCage] = useState(null);
+  const fileRef = useRef();
+
+  /* derive litters from flat mouse list */
+  const litters = useMemo(() => {
+    const map = {};
+    mice.forEach(m => {
+      if(!m.litter) return;
+      if(!map[m.litter]) map[m.litter] = {
+        id:m.litter, cross:m.cross, parents:m.parents,
+        dob:m.dob, mice:[]
+      };
+      map[m.litter].mice.push(m);
+    });
+    return Object.values(map).sort((a,b) => a.id.localeCompare(b.id));
+  }, [mice]);
+
+  /* spot -> mice */
+  const spotMap = useMemo(() => {
+    const m = {};
+    mice.forEach(mouse => {
+      const s = mouse.spot;
+      if(!s || s==="TBD") return;
+      if(!m[s]) m[s] = [];
+      m[s].push(mouse);
+    });
+    return m;
+  }, [mice]);
+
+  /* spot -> breeder */
+  const breedersMap = useMemo(() =>
+    Object.fromEntries(breeders.map(b=>[b.spot,b])), [breeders]);
+
+  /* unique crosses */
+  const crosses = useMemo(() =>
+    ["all", ...new Set(mice.map(m=>m.cross).filter(Boolean))], [mice]);
+
+  /* every distinct cross string in the colony, for cage edit dropdown */
+  const allCrosses = useMemo(() => {
+    const set = new Set();
+    mice.forEach(m => m.cross && set.add(m.cross));
+    breeders.forEach(b => b.cross && set.add(b.cross));
+    return [...set].sort();
+  }, [mice, breeders]);
+
+  /* spot -> short description (cage + mice count or breeder label) for the spot picker hints */
+  const descByCage = useMemo(() => {
+    const d = {};
+    breeders.forEach(b => { d[b.spot] = `cage ${b.cage} (${b.cross})`; });
+    Object.entries(spotMap).forEach(([sp, ms]) => {
+      d[sp] = (d[sp] ? d[sp]+", " : "") + `cage ${ms[0].cage} (${ms.length} mice)`;
+    });
+    return d;
+  }, [spotMap, breeders]);
+
+  /* filtered litters */
+  const filtered = useMemo(() => litters.filter(l => {
+    if(filterCross!=="all" && l.cross!==filterCross) return false;
+    if(filterGeno!=="all" && !l.mice.some(m=>m.geno===filterGeno)) return false;
+    if(search) {
+      const t = search.toLowerCase();
+      return l.id.toLowerCase().includes(t)
+        || (l.parents||"").toLowerCase().includes(t)
+        || (l.cross||"").toLowerCase().includes(t)
+        || l.mice.some(m =>
+            (m.id||"").toLowerCase().includes(t)
+            || (m.geno||"").toLowerCase().includes(t)
+            || (m.cage||"").toLowerCase().includes(t)
+            || (m.spot||"").toLowerCase().includes(t)
+            || (m.notes||"").toLowerCase().includes(t));
+    }
+    return true;
+  }), [litters, filterCross, filterGeno, search]);
+
+  /* handlers */
+  const saveMouse = m => {
+    setMice(prev => {
+      const i = prev.findIndex(x => x._id===m._id);
+      if(i<0) return [...prev, m];
+      const cp = [...prev]; cp[i] = m; return cp;
+    });
+    setEditing(null);
+  };
+  const deleteMouse = m => {
+    if(!confirm(`Delete mouse ${m.id}?`)) return;
+    setMice(prev => prev.filter(x => x._id !== m._id));
+    setEditing(null);
+  };
+  const addMouse = () => setEditing({
+    id:"", sex:"F", geno:"pending", cage:"", spot:"", dob:"",
+    litter:"", cross:"", parents:"", notes:"", _id:null
+  });
+
+  /* ───────── cage handlers ─────────
+     A "cage" pseudo-record might be a breeder OR a derived weaned cage.
+     orig is the original cage record (before edits) so we know what to look
+     up by oldSpot/oldCage. updated is the new field values.
+  */
+  const openCageEdit = (orig) => setEditingCage(orig);
+  const addCage = () => setEditingCage({
+    cage:"", spot:"", cross:"", label:"", note:"", kind:"breeder", isNew:true
+  });
+
+  const saveCage = (updated) => {
+    const orig = editingCage;
+    if(!orig) { setEditingCage(null); return; }
+    const oldSpot = orig.spot;
+    const oldCage = orig.cage;
+    const newSpot = updated.spot;
+    const newCage = updated.cage;
+    const spotChanged = newSpot && newSpot !== oldSpot;
+
+    // Spot collision: if target spot is occupied by something else, offer a swap
+    if(spotChanged) {
+      const targetOccupied = mice.some(m => m.spot===newSpot && m.cage!==oldCage)
+        || breeders.some(b => b.spot===newSpot && b.cage!==oldCage);
+      if(targetOccupied) {
+        const choice = confirm(`${newSpot} is already occupied. OK = swap the two cages; Cancel = abort this save.`);
+        if(!choice) return;
+        // perform swap with original cage data — use moveCageSpot's logic inline
+        setMice(prev => prev.map(m =>
+          m.spot===oldSpot ? {...m, spot:newSpot, cage:newCage || m.cage, cross: updated.cross || m.cross}
+          : m.spot===newSpot ? {...m, spot:oldSpot}
+          : m));
+        setBreeders(prev => prev.map(b => {
+          if(b.spot===oldSpot && b.cage===oldCage) {
+            return {cage:newCage, spot:newSpot, cross:updated.cross,
+              label:updated.label||"", note:updated.note||""};
+          }
+          if(b.spot===newSpot) return {...b, spot:oldSpot};
+          return b;
+        }));
+        // If orig was a brand-new cage being added, add it now (swap target keeps oldSpot)
+        if(orig.isNew) {
+          setBreeders(prev => [...prev.filter(b => !(b.spot===newSpot && b.cage!==oldCage)),
+            ...prev.filter(b => b.spot===newSpot && b.cage!==oldCage).map(b => ({...b, spot:oldSpot})),
+            {cage:newCage, spot:newSpot, cross:updated.cross,
+              label:updated.label||"", note:updated.note||""}]);
+        }
+        setEditingCage(null);
+        return;
+      }
+    }
+
+    setEditingCage(null);
+    const breederIdx = breeders.findIndex(b => b.spot===oldSpot && b.cage===oldCage);
+
+    // 1. update mice if any live at oldCage
+    if(!orig.isNew && oldCage) {
+      setMice(prev => prev.map(m => {
+        if(m.cage === oldCage && (!oldSpot || m.spot === oldSpot)) {
+          return {...m,
+            cage:newCage || m.cage,
+            spot:newSpot || m.spot,
+            cross: updated.cross || m.cross
+          };
+        }
+        return m;
+      }));
+    }
+    // 2. update or insert breeder record
+    if(orig.isNew) {
+      setBreeders(prev => [...prev, {
+        cage:newCage, spot:newSpot, cross:updated.cross,
+        label:updated.label||"", note:updated.note||""
+      }]);
+    } else if(breederIdx >= 0) {
+      setBreeders(prev => {
+        const cp = [...prev];
+        cp[breederIdx] = {
+          cage:newCage, spot:newSpot, cross:updated.cross,
+          label:updated.label||"", note:updated.note||""
+        };
+        return cp;
+      });
+    }
+  };
+
+  const deleteCage = (cage) => {
+    const what = cage.kind==="weaned" && cage.miceCount
+      ? `delete cage ${cage.cage} AND its ${cage.miceCount} mice`
+      : `delete cage ${cage.cage}`;
+    if(!confirm(`Are you sure you want to ${what}?`)) return;
+    setEditingCage(null);
+    setMice(prev => prev.filter(m => !(m.cage===cage.cage && m.spot===cage.spot)));
+    setBreeders(prev => prev.filter(b => !(b.spot===cage.spot && b.cage===cage.cage)));
+  };
+
+  /* drag-and-drop / quick move: swap (or move into empty) two rack spots */
+  const moveCageSpot = (fromSpot, toSpot) => {
+    if(!fromSpot || !toSpot || fromSpot === toSpot) return;
+    const fromMice = mice.filter(m => m.spot === fromSpot);
+    const toMice = mice.filter(m => m.spot === toSpot);
+    const fromBreeder = breeders.find(b => b.spot === fromSpot);
+    const toBreeder = breeders.find(b => b.spot === toSpot);
+    const fromHas = fromMice.length>0 || !!fromBreeder;
+    const toHas = toMice.length>0 || !!toBreeder;
+    if(!fromHas) return;
+    if(toHas) {
+      if(!confirm(`${toSpot} already has a cage. Swap ${fromSpot} ⇄ ${toSpot}?`)) return;
+    }
+    setMice(prev => prev.map(m =>
+      m.spot===fromSpot ? {...m, spot:toSpot}
+      : m.spot===toSpot ? {...m, spot:fromSpot}
+      : m));
+    setBreeders(prev => prev.map(b =>
+      b.spot===fromSpot ? {...b, spot:toSpot}
+      : b.spot===toSpot ? {...b, spot:fromSpot}
+      : b));
+  };
+
+  const handleCSV = file => {
+    if(!file) return;
+    Papa.parse(file, {header:true, skipEmptyLines:true, complete:({data})=>{
+      const newMice = [], newBreeders = [];
+      data.forEach(r => {
+        if((r.type||"").toLowerCase()==="breeder") {
+          newBreeders.push({
+            cage:r.cage, spot:r.spot, cross:r.cross,
+            label:r.label||"", note:r.notes||""
+          });
+        } else if(r.id) {
+          newMice.push({
+            _id:uid(), id:r.id, sex:r.sex||"?", geno:r.geno||"pending",
+            cage:r.cage||"", spot:r.spot||"", dob:r.dob||"",
+            litter:r.litter||"", cross:r.cross||"",
+            parents:r.parents||"", notes:r.notes||""
+          });
+        }
+      });
+      if(newMice.length) setMice(newMice);
+      if(newBreeders.length) setBreeders(newBreeders);
+    }});
+  };
+
+  const pendingCount = mice.filter(m=>m.geno==="pending"||m.geno==="?").length;
+
+  return <div style={{minHeight:"100vh", background:T.bg, color:T.text, fontFamily:"DM Mono,monospace"}}>
+    <link href={FONT_LINK} rel="stylesheet"/>
+
+    {/* HEADER */}
+    <div style={{background:T.surface, borderBottom:`1px solid ${T.border}`,
+      padding:"0 20px", display:"flex", alignItems:"stretch", justifyContent:"space-between",
+      flexWrap:"wrap", boxShadow:"0 1px 4px #0000000d"}}>
+      <div style={{display:"flex", alignItems:"center", gap:"12px", padding:"12px 0"}}>
+        <span style={{fontFamily:"Syne,sans-serif", fontSize:"18px", fontWeight:800,
+          color:T.header, letterSpacing:"-0.01em", display:"inline-flex", alignItems:"center", gap:"6px"}}>
+          <Mouse size={20} color={T.accent}/>Colony<span style={{color:T.accent}}>OS</span>
+        </span>
+        <div style={{display:"flex", gap:"4px", borderLeft:`1px solid ${T.border}`, paddingLeft:"12px"}}>
+          <span style={{background:T.accentBg, border:`1px solid ${T.accentBorder}`,
+            color:T.accent, borderRadius:"4px", padding:"2px 7px", fontSize:"10px",
+            fontFamily:"Syne,sans-serif", fontWeight:700}}>{litters.length} litters</span>
+          <span style={{background:"#f0fdf4", border:"1px solid #86efac", color:"#15803d",
+            borderRadius:"4px", padding:"2px 7px", fontSize:"10px",
+            fontFamily:"Syne,sans-serif", fontWeight:700}}>{mice.length} mice</span>
+          {pendingCount>0 && <span style={{background:"#fffbeb", border:"1px solid #fde68a",
+            color:"#92400e", borderRadius:"4px", padding:"2px 7px", fontSize:"10px",
+            fontFamily:"Syne,sans-serif", fontWeight:700}}>! {pendingCount} pending</span>}
+        </div>
+      </div>
+      <div style={{display:"flex", alignItems:"stretch"}}>
+        {["overview","litters","rack"].map(id => (
+          <button key={id} onClick={()=>setView(id)} style={{
+            background:"transparent",
+            borderBottom:`2px solid ${view===id?T.accent:"transparent"}`,
+            borderTop:"none", borderLeft:"none", borderRight:"none",
+            color:view===id?T.accent:T.textSoft,
+            padding:"0 16px", cursor:"pointer", fontSize:"11px",
+            fontFamily:"Syne,sans-serif", fontWeight:700, letterSpacing:"0.06em",
+            textTransform:"uppercase", transition:"all 0.15s"
+          }}>
+            {id==="overview"?"Overview":id==="litters"?"Litters":"Rack Map"}
+          </button>
+        ))}
+      </div>
+      <div style={{display:"flex", alignItems:"center", gap:"6px", padding:"10px 0"}}>
+        <button onClick={addMouse} style={{
+          background:T.accent, border:`1px solid ${T.accent}`, color:"#fff",
+          borderRadius:"6px", padding:"5px 10px", cursor:"pointer", fontSize:"10px",
+          fontFamily:"inherit", fontWeight:700, display:"inline-flex",
+          alignItems:"center", gap:"4px"
+        }}><Plus size={11}/> Add mouse</button>
+        <button onClick={addCage} style={{
+          background:"#eff6ff", border:"1px solid #93c5fd", color:T.accent,
+          borderRadius:"6px", padding:"5px 10px", cursor:"pointer", fontSize:"10px",
+          fontFamily:"inherit", fontWeight:700, display:"inline-flex",
+          alignItems:"center", gap:"4px"
+        }}><Plus size={11}/> Add cage</button>
+        <button onClick={()=>fileRef.current.click()} style={{
+          background:T.surfaceAlt, border:`1px solid ${T.border}`, color:T.textMid,
+          borderRadius:"6px", padding:"5px 10px", cursor:"pointer", fontSize:"10px",
+          fontFamily:"inherit", fontWeight:600, display:"inline-flex",
+          alignItems:"center", gap:"4px"
+        }}><Upload size={11}/> Import</button>
+        <input ref={fileRef} type="file" accept=".csv" style={{display:"none"}}
+          onChange={e=>handleCSV(e.target.files[0])}/>
+        <button onClick={()=>exportCSV(mice, breeders)} style={{
+          background:"#f0fdf4", border:"1px solid #86efac", color:"#15803d",
+          borderRadius:"6px", padding:"5px 10px", cursor:"pointer", fontSize:"10px",
+          fontFamily:"inherit", fontWeight:600, display:"inline-flex",
+          alignItems:"center", gap:"4px"
+        }}><Download size={11}/> Export</button>
+        <button onClick={resetSeed} title="Reset all data back to the 5/22/26 seed" style={{
+          background:"#fef2f2", border:"1px solid #fca5a5", color:"#b91c1c",
+          borderRadius:"6px", padding:"5px 10px", cursor:"pointer", fontSize:"10px",
+          fontFamily:"inherit", fontWeight:600, display:"inline-flex",
+          alignItems:"center", gap:"4px"
+        }}>↺ Reset</button>
+      </div>
+    </div>
+
+    <div style={{padding:"16px 20px"}}>
+      {/* OVERVIEW */}
+      {view==="overview" && <div>
+        <StatsPanel mice={mice}/>
+        <GenotypeCountsPanel mice={mice}/>
+
+        {pendingCount>0 && <div style={{
+          background:"#fffbeb", border:"1px solid #fde68a", borderLeft:"4px solid #f59e0b",
+          borderRadius:"8px", padding:"12px 16px", marginBottom:"14px"
+        }}>
+          <div style={{color:"#92400e", fontFamily:"Syne,sans-serif", fontSize:"12px",
+            fontWeight:700, marginBottom:"6px", display:"inline-flex", alignItems:"center", gap:"6px"}}>
+            <AlertCircle size={13}/> Pending Genotypes ({pendingCount} mice)
+          </div>
+          <div style={{display:"flex", flexWrap:"wrap", gap:"4px"}}>
+            {litters.filter(l=>l.mice.some(m=>m.geno==="pending"||m.geno==="?")).map(l=>{
+              const c = l.mice.filter(m=>m.geno==="pending"||m.geno==="?").length;
+              return <span key={l.id} onClick={()=>{setView("litters");setExpanded(l.id);}}
+                style={{background:"#fef3c7", border:"1px solid #fde68a", color:"#92400e",
+                borderRadius:"4px", padding:"2px 8px", fontSize:"10px",
+                fontFamily:"DM Mono,monospace", fontWeight:700, cursor:"pointer"}}>
+                {l.id} ({c})
+              </span>;
+            })}
+          </div>
+        </div>}
+
+        <div style={{background:T.surface, border:`1px solid ${T.border}`,
+          borderRadius:"10px", overflow:"hidden", boxShadow:"0 1px 3px #0000000d"}}>
+          <div style={{display:"grid", gridTemplateColumns:"150px 1fr 50px 50px 70px 90px",
+            background:T.surfaceAlt, borderBottom:`1px solid ${T.border}`,
+            padding:"8px 14px", color:T.textSoft, fontSize:"9px",
+            fontFamily:"Syne,sans-serif", fontWeight:700, letterSpacing:"0.1em",
+            textTransform:"uppercase", gap:"8px"}}>
+            <div>Litter</div><div>Cross</div><div>♀</div><div>♂</div><div>Pending</div><div>DOB</div>
+          </div>
+          <div style={{maxHeight:"380px", overflowY:"auto"}}>
+            {litters.map(l => {
+              const F=l.mice.filter(m=>m.sex==="F").length;
+              const M=l.mice.filter(m=>m.sex==="M").length;
+              const pend=l.mice.filter(m=>m.geno==="pending"||m.geno==="?").length;
+              return <div key={l.id} onClick={()=>{setView("litters");setExpanded(l.id);}} style={{
+                display:"grid", gridTemplateColumns:"150px 1fr 50px 50px 70px 90px",
+                padding:"7px 14px", borderBottom:`1px solid ${T.border}`,
+                cursor:"pointer", gap:"8px", alignItems:"center", transition:"background 0.1s"
+              }} onMouseEnter={e=>e.currentTarget.style.background=T.accentBg}
+                 onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <div style={{color:T.header, fontFamily:"DM Mono,monospace", fontSize:"11px", fontWeight:700}}>{l.id}</div>
+                <div style={{color:T.textMid, fontSize:"10px", overflow:"hidden",
+                  textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{l.cross}</div>
+                <div style={{color:T.pink, fontSize:"11px", fontFamily:"DM Mono,monospace", fontWeight:700}}>{F}</div>
+                <div style={{color:T.blue, fontSize:"11px", fontFamily:"DM Mono,monospace", fontWeight:700}}>{M}</div>
+                <div style={{color:pend>0?"#92400e":T.textSoft, fontSize:"11px",
+                  fontFamily:"DM Mono,monospace", fontWeight:pend>0?700:400}}>{pend||"—"}</div>
+                <div style={{color:T.textSoft, fontSize:"10px", fontFamily:"DM Mono,monospace"}}>{l.dob}</div>
+              </div>;
+            })}
+          </div>
+        </div>
+      </div>}
+
+      {/* LITTERS */}
+      {view==="litters" && <div>
+        <div style={{display:"flex", gap:"8px", marginBottom:"12px",
+          flexWrap:"wrap", alignItems:"center"}}>
+          <div style={{position:"relative", flex:1, minWidth:"180px"}}>
+            <Search size={12} style={{position:"absolute", left:"10px",
+              top:"50%", transform:"translateY(-50%)", color:T.textSoft}}/>
+            <input placeholder="Search litter, mouse ID, spot, cage, genotype, notes..."
+              value={search} onChange={e=>setSearch(e.target.value)}
+              style={{...inputStyle, paddingLeft:"30px", padding:"7px 10px 7px 30px"}}/>
+          </div>
+          <select value={filterCross} onChange={e=>setFilterCross(e.target.value)}
+            style={{...inputStyle, width:"auto"}}>
+            {crosses.map(c => <option key={c} value={c}>{c==="all"?"All crosses":c}</option>)}
+          </select>
+          <select value={filterGeno} onChange={e=>setFilterGeno(e.target.value)}
+            style={{...inputStyle, width:"auto"}}>
+            <option value="all">All genotypes</option>
+            {GENO_CATALOG.map(g => <option key={g.key} value={g.key}>{g.label} ({g.key})</option>)}
+          </select>
+          <span style={{color:T.textSoft, fontSize:"11px", whiteSpace:"nowrap"}}>
+            {filtered.length}/{litters.length} litters
+          </span>
+        </div>
+        <div style={{display:"grid",
+          gridTemplateColumns:"repeat(auto-fill, minmax(380px, 1fr))", gap:"0 16px"}}>
+          {filtered.map(l => <LitterCard key={l.id} litter={l}
+            expanded={expanded===l.id}
+            onToggle={()=>setExpanded(expanded===l.id?null:l.id)}
+            onEditMouse={setEditing}/>)}
+        </div>
+      </div>}
+
+      {/* RACK */}
+      {view==="rack" && <RackMap spotMap={spotMap} breedersMap={breedersMap}
+        breeders={breeders} onEditMouse={setEditing}
+        onEditCage={openCageEdit} onMoveCageSpot={moveCageSpot}/>}
+    </div>
+
+    {/* EDIT MOUSE MODAL */}
+    {editing && <EditMouseModal mouse={editing}
+      onSave={saveMouse} onCancel={()=>setEditing(null)} onDelete={deleteMouse}
+      descByCage={descByCage}/>}
+
+    {/* EDIT CAGE MODAL */}
+    {editingCage && <EditCageModal cage={editingCage}
+      onSave={saveCage} onCancel={()=>setEditingCage(null)} onDelete={deleteCage}
+      descByCage={descByCage} allCrosses={allCrosses}/>}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
